@@ -63,7 +63,7 @@ def copy_images(src_folder, dest_folder, start_index):
 ```
 
 ```python
-def main():
+def copy_into_one():
     if not os.path.exists(dest_folder_images):
         os.makedirs(dest_folder_images)
 
@@ -89,8 +89,8 @@ def main():
         index_images += num_images
         index_masks += num_masks
 
-if __name__ == "__main__":
-    main()
+
+copy_into_one()
 
 ```
 
@@ -135,12 +135,10 @@ def split_data(src_folder, train_folder, test_folder, train_ratio):
             dest_mask_path = os.path.join(test_folder, "test_y", mask)
             shutil.copy(src_mask_path, dest_mask_path)
 
-def main():
 
-    split_data(src_folder, train_folder, test_folder, train_ratio)
+split_data(src_folder, train_folder, test_folder, train_ratio)
 
-if __name__ == "__main__":
-    main()
+
 
 ```
 
