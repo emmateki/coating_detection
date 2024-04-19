@@ -22,7 +22,6 @@ import os
 import shutil
 import cv2
 import random
-import matplotlib.pyplot as plt
 ```
 
 ## 1. Put all Data into one final folder and rename them
@@ -32,34 +31,27 @@ Need to take all the data from diffrent samples and copy them into one file. Ren
 
 ```python
 
-src_folder = "/home/emma/Documents/UJV/CORROSION/data_processing_ML/DATA_OLD_DONE"
-dest_folder_images = "/home/emma/Documents/UJV/CORROSION/data_processing_ML/ML_Data_povlak_TRY/Image/"
-dest_folder_masks = "/home/emma/Documents/UJV/CORROSION/data_processing_ML/ML_Data_povlak_TRY/Mask/"
+src_folder = "path/to/src/folder" # this conatins folder with subfolders which have folder images and masks and in them samples named with natural numbers
+dest_folder_images = "data/Image"
+dest_folder_masks = "data/Mask"
 
-train_folder = "/home/emma/Documents/UJV/CORROSION/data_processing_ML/ML_Data_povlak_01/train_data"
-test_folder = "/home/emma/Documents/UJV/CORROSION/data_processing_ML/ML_Data_povlak_01/test_data"
-train_ratio = 0.8  # 80% for tr
-#later in these paths will be saved new ones
-dest_mask_path=""
-dest_img_path=""
+train_folder = "DATA_DONE/train"
+test_folder = "DATA_DONE/test"
+train_ratio = 0.8  # 80% for train
+
 
 ```
 
 ```python
 def copy_images(src_folder, dest_folder, start_index):
     index = start_index
-    for subdir_name in ["strana_1", "strana_2"]:
-        subdir_path = os.path.join(src_folder, subdir_name)
-        if not os.path.exists(subdir_path):
-            continue
-
-        for filename in sorted(os.listdir(subdir_path)):
-            if filename.endswith('.png'):
-                src_path = os.path.join(subdir_path, filename)
-                dest_filename = '{:02d}.png'.format(index)
-                dest_path = os.path.join(dest_folder, dest_filename)
-                shutil.copy(src_path, dest_path)
-                index += 1
+    for filename in sorted(os.listdir(src_folder)):
+        if filename.endswith('.png'):
+            src_path = os.path.join(src_folder, filename)
+            dest_filename = '{:02d}.png'.format(index)
+            dest_path = os.path.join(dest_folder, dest_filename)
+            shutil.copy(src_path, dest_path)
+            index += 1
 ```
 
 ```python
@@ -79,17 +71,13 @@ def copy_into_one():
             continue
 
         copy_images(os.path.join(folder_path, "images"), dest_folder_images, index_images)
-        copy_images(os.path.join(folder_path, "masks_povlak"), dest_folder_masks, index_masks)
+        copy_images(os.path.join(folder_path, "masks"), dest_folder_masks, index_masks)
 
-        num_images = sum(1 for _ in os.listdir(os.path.join(folder_path, "images", "strana_1"))) + \
-                     sum(1 for _ in os.listdir(os.path.join(folder_path, "images", "strana_2")))
-        num_masks = sum(1 for _ in os.listdir(os.path.join(folder_path, "masks_povlak", "strana_1"))) + \
-                    sum(1 for _ in os.listdir(os.path.join(folder_path, "masks_povlak", "strana_2")))
+        num_images = sum(1 for _ in os.listdir(os.path.join(folder_path, "images"))) 
+        num_masks = sum(1 for _ in os.listdir(os.path.join(folder_path, "masks"))) 
 
         index_images += num_images
         index_masks += num_masks
-
-
 copy_into_one()
 
 ```
@@ -97,7 +85,7 @@ copy_into_one()
 # 2. Split data 
 
 ```python
-def split_data(src_folder, train_folder, test_folder, train_ratio):
+def split_data(train_folder, test_folder, train_ratio):
     
     if not os.path.exists(train_folder):
         os.makedirs(os.path.join(train_folder, "train_x"))
@@ -135,11 +123,7 @@ def split_data(src_folder, train_folder, test_folder, train_ratio):
             dest_mask_path = os.path.join(test_folder, "test_y", mask)
             shutil.copy(src_mask_path, dest_mask_path)
 
-
-split_data(src_folder, train_folder, test_folder, train_ratio)
-
-
-
+split_data( train_folder, test_folder, train_ratio)
 ```
 
 # 3. Check shape
@@ -153,7 +137,6 @@ for filename_x in os.listdir(dest_folder_images):
 
         filename_y = filename_x 
         y_path = os.path.join(dest_folder_masks, filename_y)
-        print (dest_folder_masks)
         y_img = cv2.imread(y_path, cv2.IMREAD_UNCHANGED)
 
         assert x_img.shape == y_img.shape, f"Shape mismatch for {x_path}: {x_img.shape} != {y_path}: {y_img.shape}"
