@@ -29,16 +29,3 @@ def evaluate_IoU(ground_truth, inferences, width):
     mean_iou_lines = float(mean_iou_lines.item() ) 
     return mean_iou, mean_iou_lines
 
-"""
-with torch.no_grad():
-    tensors = [torch.Tensor(img[None][None]) for img in test_imgs]
-    preds = [model(t).cpu().detach()[0][0] for t in tensors]
-
-#convert test masks to tensors
-test_masks = [torch.Tensor(mask) for mask in test_masks]
-width = test_masks[0].shape[1]  # Assuming all masks have the same width - need to check this
-
-
-iou_score, line_iou_scores = evaluate_IoU(test_masks, preds,width)
-iou_combined = iou_score*0.5 +line_iou_scores*0.5
-"""
