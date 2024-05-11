@@ -36,7 +36,7 @@ device = 'cpu' # if cuda available
 # Data Preparation
 
 ```python
-data_root = pathlib.Path('/home/tekulova/DATA/data_coating')
+data_root = pathlib.Path('/DATA/data_coating')
 ```
 
 ```python
@@ -154,39 +154,53 @@ def setup_augmentation(
     elif crop_or_resize == 'resize':
         transform_list.append(A.Resize(height=patch_size, width=patch_size, interpolation=interpolation))
 
-    # Add other augmentation transforms based on specified parameters
-    if elastic:
-        transform_list.append(A.ElasticTransform(
-            p=0.5,
-            alpha=10,
-            sigma=120 * 0.1,
-            alpha_affine=120 * 0.1,
-            interpolation=interpolation,
-        ))
 
+    if elastic:
+        transform_list += [
+            A.ElasticTransform(
+                p=0.5,
+                alpha=10,
+                sigma=120 * 0.1,
+                alpha_affine=120 * 0.1,
+                interpolation=interpolation,
+            )
+        ]
     if rotate_deg is not None:
-        transform_list.append(A.Rotate(limit=rotate_deg, interpolation=interpolation))
+        transform_list += [
+            A.Rotate(limit=rotate_deg, interpolation=interpolation),
+        ]
 
     if brightness_contrast:
-        transform_list.append(A.RandomBrightnessContrast(p=0.5))
-
+        transform_list += [
+            A.RandomBrightnessContrast(p=0.5),
+        ]
     if noise_val is not None:
-        transform_list.append(A.GaussNoise(noise_val, p=1))
+        transform_list += [
+            A.augmentations.transforms.GaussNoise(noise_val, p=1),
+        ]
 
     if blur_sharp_power is not None:
-        transform_list.append(A.OneOf([
-            A.Sharpen(p=1, alpha=(0.2, 0.2 * blur_sharp_power)),
-            A.Blur(blur_limit=3 * blur_sharp_power, p=1),
-        ], p=0.3))
+        transform_list += [
+            A.OneOf(
+                [
+                    A.Sharpen(p=1, alpha=(0.2, 0.2 * blur_sharp_power)),
+                    A.Blur(blur_limit=3 * blur_sharp_power, p=1),
+                ],
+                p=0.3,
+            ),
+        ]
 
     if flip_horizontal:
-        transform_list.append(A.HorizontalFlip(p=0.5))
-
+        transform_list += [
+            A.HorizontalFlip(p=0.5),
+        ]
     if flip_vertical:
-        transform_list.append(A.VerticalFlip(p=0.5))
+        transform_list += [
+            A.VerticalFlip(p=0.5),
+        ]
 
-    augmentation_pipeline = A.Compose(transform_list)
-    return augmentation_pipeline
+    transform_list += [A.CenterCrop(patch_size, patch_size)]
+    return A.Compose(transform_list)
 ```
 
 ```python
