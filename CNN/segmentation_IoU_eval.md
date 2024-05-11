@@ -7,9 +7,9 @@ jupyter:
       format_version: '1.3'
       jupytext_version: 1.15.2
   kernelspec:
-    display_name: torch_cv
+    display_name: Python 3 (ipykernel)
     language: python
-    name: torch_cv
+    name: python3
 ---
 
 ```python
@@ -24,21 +24,50 @@ import imageio
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
-from torchmetrics import IoU
+import torchmetrics
+from torchmetrics import JaccardIndex
+import csv
+import os
+import cv2
 
-device = 'cuda' # if cuda available
+device = 'cpu' # if cuda available
 ```
 
 # Data Preparation
 
 ```python
-data_root = pathlib.Path('/home/knotek/jupyterlab/data/Data_povlak_mech/')
+data_root = pathlib.Path('/home/tekulova/DATA/data_coating')
 ```
 
 ```python
 import scipy.ndimage as ndi
 from tqdm.auto import tqdm 
 
+#NEW function for loading the roi measurments into arr
+def roiread(image_test_names):
+    csv_roi_path = data_root / 'roi.csv'
+    roi_arr = []
+    
+    for image_test_name in image_test_names:
+        with open(csv_roi_path, 'r') as csvfile:
+            csv_reader = csv.reader(csvfile)
+            header = next(csv_reader)  # Skip first row - column names
+            
+            for row in csv_reader:
+                if row[1] == image_test_name:
+
+                    original_name = row[0]
+                    train_name = row[1]
+                    roi_file = row[2]
+                    x1 = row[3]
+                    x2 = row[4]
+                    y1 = int(row[5]) if row[5].strip().lower() != 'nan' else np.nan
+                    y2 = int(row[6]) if row[6].strip().lower() != 'nan'  else np.nan
+                    length = row[7]
+                    
+                    roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
+    return roi_arr
+    
 def imread(p):
     img = imageio.imread(p)
     if img.ndim == 3:
@@ -50,17 +79,23 @@ def imread(p):
     
     return np.float32(img_norm)
 
+
 def imread_mask(p):
     img = imread(p)
     just_mask = np.float32(img > 0) # ensure only two values 1.0 and 0.0    
     return just_mask
-    
+
 def read_set(root,set_name):
     str_set_path = root/f'{set_name}'
     x_root = str_set_path/ f"{set_name}_x"
-    y_root = str_set_path/f"{set_name}_y"
+    #EDIT THIS
+    y_root = str_set_path/f"{set_name}_y_without_oxidation"
     
     x_paths = list(x_root.glob("*.png"))
+
+    # NEW save the names of the samples for roi files
+    image_names = [os.path.splitext(p.name)[0] for p in x_paths]
+
     # ensure the same order
     y_paths = [y_root / p.name for p in x_paths]
 
@@ -81,42 +116,27 @@ def read_set(root,set_name):
         y_resized.append(yy_new[:half])
         x.append(xx[:half])
         
-    return x,y_resized
+    return x,y_resized, image_names
 
-test_imgs,test_masks = read_set(data_root, 'test')
-train_imgs,train_masks = read_set(data_root, 'train')
+test_imgs,test_masks, image_test_names = read_set(data_root, 'test')
+train_imgs,train_masks,image_train_names = read_set(data_root, 'train')
+
+test_roi = roiread(image_test_names)
 
 assert len(train_imgs) == len(train_masks)
 assert len(test_imgs) == len(test_masks)
-```
-
-# Data Alteration
-
-It can be seen that majority of the image is homogenous. That will make the detection harder (with as few images as we have available)
-
-Image will be cropped to the parts where the oxide is located
-
-# TODO
-
-... also, crop sides where the oxides is but the label is not available.
-
-Notice that the patch size is defined here. It's because we need to discuss if it is the right value based on the data. 
-
-
-# Croping Images
-
-```python
-
 ```
 
 # Augumentation
 
 Uses albumentation.
 
-```python
+```python editable=true slideshow={"slide_type": ""}
 import albumentations as A
-def setup_augumentation(
+
+def setup_augmentation(
     patch_size,
+    crop_or_resize,  # Option: 'crop' or 'resize'
     elastic=False,  # True
     brightness_contrast=False,
     flip_vertical=False,
@@ -126,75 +146,66 @@ def setup_augumentation(
     rotate_deg=None,  # 90
     interpolation=2, # constant representing cv2.INTER_CUBIC
 ):
-    patch_size_padded = int(patch_size * 1.5)
-    transform_list = [
-        A.PadIfNeeded(patch_size_padded, patch_size_padded),
-        A.RandomCrop(patch_size_padded, patch_size_padded),
-    ]
+    transform_list = []
+    if crop_or_resize == 'crop':
+        patch_size_padded = int(patch_size * 1.5)
+        transform_list.append(A.PadIfNeeded(patch_size_padded, patch_size_padded))
+        transform_list.append(A.RandomCrop(patch_size, patch_size))
+    elif crop_or_resize == 'resize':
+        transform_list.append(A.Resize(height=patch_size, width=patch_size, interpolation=interpolation))
 
+    # Add other augmentation transforms based on specified parameters
     if elastic:
-        transform_list += [
-            A.ElasticTransform(
-                p=0.5,
-                alpha=10,
-                sigma=120 * 0.1,
-                alpha_affine=120 * 0.1,
-                interpolation=interpolation,
-            )
-        ]
+        transform_list.append(A.ElasticTransform(
+            p=0.5,
+            alpha=10,
+            sigma=120 * 0.1,
+            alpha_affine=120 * 0.1,
+            interpolation=interpolation,
+        ))
+
     if rotate_deg is not None:
-        transform_list += [
-            A.Rotate(limit=rotate_deg, interpolation=interpolation),
-        ]
+        transform_list.append(A.Rotate(limit=rotate_deg, interpolation=interpolation))
 
     if brightness_contrast:
-        transform_list += [
-            A.RandomBrightnessContrast(p=0.5),
-        ]
+        transform_list.append(A.RandomBrightnessContrast(p=0.5))
+
     if noise_val is not None:
-        transform_list += [
-            A.augmentations.transforms.GaussNoise(noise_val, p=1),
-        ]
+        transform_list.append(A.GaussNoise(noise_val, p=1))
 
     if blur_sharp_power is not None:
-        transform_list += [
-            A.OneOf(
-                [
-                    A.Sharpen(p=1, alpha=(0.2, 0.2 * blur_sharp_power)),
-                    A.Blur(blur_limit=3 * blur_sharp_power, p=1),
-                ],
-                p=0.3,
-            ),
-        ]
+        transform_list.append(A.OneOf([
+            A.Sharpen(p=1, alpha=(0.2, 0.2 * blur_sharp_power)),
+            A.Blur(blur_limit=3 * blur_sharp_power, p=1),
+        ], p=0.3))
 
     if flip_horizontal:
-        transform_list += [
-            A.HorizontalFlip(p=0.5),
-        ]
+        transform_list.append(A.HorizontalFlip(p=0.5))
+
     if flip_vertical:
-        transform_list += [
-            A.VerticalFlip(p=0.5),
-        ]
+        transform_list.append(A.VerticalFlip(p=0.5))
 
-    transform_list += [A.CenterCrop(patch_size, patch_size)]
-    return A.Compose(transform_list)
-
+    augmentation_pipeline = A.Compose(transform_list)
+    return augmentation_pipeline
 ```
 
 ```python
 # PATCH SIZE is not the same as resize size! *We do not resize in here.*
-patch_size = 128 # or more?
+patch_size = 256 # or more?
 
-transform_fn = setup_augumentation(
+transform_fn = setup_augmentation(
     patch_size,
+    crop_or_resize='crop',
     elastic = True,
-    brightness_contrast=True,
+    brightness_contrast=False,
     flip_vertical=False, # Oxides never flip vertically
     flip_horizontal=True,
     blur_sharp_power=None, # hopefully microscopes don't differ in blur much
     noise_val=.01,
-    rotate_deg=10,
+    rotate_deg=None,
 )
+transform_fn_resize = setup_augmentation(patch_size=256, crop_or_resize='resize')
+
 
 for x,y in zip(train_imgs + test_imgs,train_masks + test_masks):
     x=np.float32(x)
@@ -206,22 +217,60 @@ for x,y in zip(train_imgs + test_imgs,train_masks + test_masks):
     axs[0].imshow(tr_x,vmin=0,vmax=1)
     axs[1].imshow(tr_y)
     plt.show()
-    break # show jusst one
+    break
+    
+```
+
+<!-- #region editable=true slideshow={"slide_type": ""} -->
+## Training
+
+Inspired by tutorial https://pytorch.org/tutorials/beginner/introyt/trainingyt.html
+
+<!-- #endregion -->
+
+### Augumentation of sampels
+
+```python
+def prepare_augmented_dataset(images, masks, transform_fn):
+
+    augmented_images = []
+    augmented_masks = []
+
+    for img, mask in tqdm(zip(images, masks), total=len(images)):
+        
+        transformed = transform_fn(image=img, mask=mask)
+    
+        augmented_images.append(transformed["image"])
+        augmented_masks.append(transformed["mask"])
+
+    return augmented_images, augmented_masks
 
 ```
 
-# Notice 
-... that even human would have troubles to see what is the oxide and what is not. Maybe we should crop the image and increase the patch size
+```python
 
+augmented_train_images, augmented_train_masks = prepare_augmented_dataset(train_imgs, train_masks, transform_fn)
 
-# Training
+train_img_complete = train_imgs + augmented_train_images
+train_masks_complete = train_masks + augmented_train_masks
 
-Inspired by tutorial https://pytorch.org/tutorials/beginner/introyt/trainingyt.html
+assert len(train_img_complete) == len(train_masks_complete)
 
+```
+
+```python
+for x,y in zip(augmented_train_images,augmented_train_masks):
+    _,axs = plt.subplots(1,2)
+    axs[0].imshow(x,vmin=0,vmax=1)
+    axs[1].imshow(y)
+    plt.show()
+    break
+
+```
 
 ## Dataset
 
-```python
+```python editable=true slideshow={"slide_type": ""}
 class Dataset(torch.utils.data.Dataset):
     def __init__(
         self, 
@@ -241,7 +290,7 @@ class Dataset(torch.utils.data.Dataset):
         image = self.images[idx]
         label = self.labels[idx]
         
-        transformed = transform_fn(image=x, mask=y)
+        transformed = transform_fn(image=image, mask=label)
         tr_x = transformed["image"]
         tr_y = transformed["mask"]
     
@@ -249,32 +298,33 @@ class Dataset(torch.utils.data.Dataset):
             "x": tr_x[None],
             "y": tr_y[None],
         }
+
 ```
 
 ### Train/Val Split
 
-This is important to prevent overfitting
 
-```python
+```python editable=true slideshow={"slide_type": ""}
 batch_size = 32
 train_val_split = .2
 
 def ensure_at_least_batch(data,batch_size):
-    return (train_imgs*batch_size)[:batch_size]
+    return (data*batch_size)[:batch_size]
 
-val_size = int(len(train_imgs) * train_val_split)
-train_size = len(train_imgs) - val_size
+val_size = int(len(train_img_complete) * train_val_split)
+train_size = len(train_img_complete) - val_size
 
-just_train_imgs = train_imgs[:train_size]
-just_train_masks = train_masks[:train_size]
+just_train_imgs = train_img_complete[:train_size]
+just_train_masks = train_masks_complete[:train_size]
 
-val_imgs = train_imgs[-val_size:]
+val_imgs = train_img_complete[-val_size:]
 val_imgs_res = ensure_at_least_batch(val_imgs,batch_size)
+
+
 ```
 
-### Adjust Dataset Size
+### Adjust Dataset Size and Resize
 
-... to have at least one batch
 
 ```python
 
@@ -284,7 +334,7 @@ train_masks_res = ensure_at_least_batch(just_train_masks,batch_size)
 train_ds = Dataset(
     train_imgs_res,
     train_masks_res,
-    transform_fn
+    transform_fn_resize
 )
 training_loader = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True)
 
@@ -292,18 +342,21 @@ val_masks = train_masks[-val_size:]
 val_masks_res = ensure_at_least_batch(val_masks,batch_size)
 
 # There is no augumentation applied on val!
-transform_fn_val  = setup_augumentation(patch_size)
 val_ds = Dataset(
     train_imgs_res,
     train_masks_res,
-    transform_fn_val
+    transform_fn_resize
 )
 validation_loader = torch.utils.data.DataLoader(val_ds, batch_size=32, shuffle=False)
+
 ```
 
+
+<!-- #region editable=true slideshow={"slide_type": ""} -->
 ## Model
 
 See unet.py for more detail.
+<!-- #endregion -->
 
 ```python
 import unet
@@ -502,10 +555,47 @@ def evaluate_2d(ground_truths, inferences, metrics, device):
         eval_results[name] = m_result
 
     return eval_results
+
 ```
 
 ```python
+def find_start_end_positions(y_col):
+    max_y = y_col.shape[0]
+    y_found_start = np.argmax(y_col == 1)
+    y_found_end = max_y - 1 - np.argmax(torch.flip(y_col, dims=(0,)) == 1)
+    return y_found_start, y_found_end
 
+def calculate_length_difference(y_found_start, y_found_end, length):
+    return abs(abs(y_found_end - y_found_start) - length)
+
+def process_roi_row(roi_row, inference):
+    x1, x2, y1, y2, length = map(float, roi_row[3:8])
+    y_col = inference[:, int(x1)]
+    
+    y_found_start, y_found_end = find_start_end_positions(y_col) if not torch.all(y_col == 0) else (0, 0)
+    
+    length_diff = calculate_length_difference(y_found_start, y_found_end, int(length))
+    start_diff = abs(y1 - y_found_start) if not np.isnan(y1) else np.nan
+    end_diff = abs(y2 - y_found_end) if not np.isnan(y2) else np.nan
+    
+    return start_diff, end_diff, length_diff
+
+def evaluate_1d(test_roi, inferences):
+    infs_trans = [_transform(infc) for infc in inferences]
+    start_diffs, end_diffs, length_diffs = [], [], []
+
+    for num, inference in enumerate(infs_trans):
+        for i in range(num * 10, num * 10 + 10):
+            start_diff, end_diff, length_diff = process_roi_row(test_roi[i], inference)
+            start_diffs.append(start_diff)
+            end_diffs.append(end_diff)
+            length_diffs.append(length_diff)
+
+    start_end_diffs = np.concatenate([start_diffs, end_diffs])
+    return start_end_diffs, length_diffs
+```
+
+```python
 def predict(img, model, device, pad_stride=32):
     img_3d = np.stack([img] * 1)
     tensor = torch.from_numpy(img_3d).to(device)[None]
@@ -514,41 +604,86 @@ def predict(img, model, device, pad_stride=32):
     res_unp = unpad(res_tensor, pads)
     # convert to binary mask with this threshold 
     res_unp_binary = (res_unp > 0.5).float()  
-    return res_unp_binary
+    return res_unp_binary.squeeze(0).squeeze(0)
+
 
 with torch.no_grad():
     predictions = [predict(img, model, device) for img in test_imgs]
 
-# test_masks to binary tensors as well
+# test_masks to binary tensors as wel
 mask_arrays = [np.array(mask) for mask in test_masks]
 dtype = torch.float32
 mask_tensors = [torch.tensor((mask > 0.5).astype(np.float32), dtype=dtype) for mask in mask_arrays]
 
-metrics = {'IoU': IoU(num_classes=2)}
+#Eval whole area
+metrics = {'IoU': JaccardIndex(task='multiclass', num_classes=2)}
 results = evaluate_2d(mask_tensors, predictions, metrics, device)
 
+# evaluate roi
+start_end_diffs, length_diff = evaluate_1d(test_roi, predictions)
+
+success = np.sum(~np.isnan(start_end_diffs))/len(start_end_diffs)
+total_difs = np.nanmean(start_end_diffs)
+length_diff_total = np.nanmean(length_diff)
+mse_start_end = np.mean(np.square(start_end_diffs))
+mse_length = np.mean(np.square(length_diff))
+
+
 print("Mean IoU:", np.mean(results['IoU']))
+print("Succes of detected lines", success)
+print("Total diffs in start and end", total_difs)
+print("Length diff", length_diff_total)
+print("MSE of diffs in start and end", mse_start_end)
+print("MSE of Length ", mse_length)
+
 
 ```
 
-# EXPERMINETS
+### Save predicted masks with roi lines
 
-- More epochs (looks like it's still learning something)
-  - 100 epochs is 2 mins on my PC.
-  - It will be seconds on GPU
-- Better data preparation?
-  - Crop sides where valid regions are not labeled
-  - Remove bottom where "nothing happens"
-- Play around with different `patch_size`
-    - 256 is too big
-- Different augumentation?
-- More data?
+```python editable=true slideshow={"slide_type": ""}
+import imageio
+import os
 
-- At any moment, think about how many different experiments you have to do.
-- Every experiment should have it's parametrization, results and evaluation stored
-  - It's likely you will need it later
+save_dir = "results"
+
+os.makedirs(save_dir, exist_ok=True)
+
+num = 0
+for prediction_index, prediction in enumerate(predictions):
+    first_test_img = np.squeeze(prediction)
     
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(first_test_img, cmap='gray')
+    ax.axis('off')  
 
+    # Plot the ROIs on the image
+    for i in range(num, num + 10):
+        first_roi_row = test_roi[i]
+        x1, x2, y1, y2 = map(float, first_roi_row[3:7])  
+
+        if not (np.isnan(y1) or np.isnan(y2)):
+            ax.plot([x1, x2], [y1, y2], 'r-', linewidth=2)
+    
+    # Save the plot as an image with a transparent background
+    save_path = os.path.join(save_dir, f"prediction_{prediction_index}.png")
+    fig.savefig(save_path, transparent=True, bbox_inches='tight', pad_inches=0)  
+    plt.close() 
+    
+    num += 10 
+
+```
+
+```python editable=true slideshow={"slide_type": ""}
+
+with torch.no_grad():
+    preds = [predict(img, model, device) for img in test_imgs]
+
+for imgs in zip(test_imgs,test_masks, preds):
+    fig,axs = plt.subplots(1,3,figsize=(21,7))
+    _=[ax.imshow(img) for ax,img in zip(axs,imgs)]
+    plt.show()
+```
 
 ```python
 exit ()
