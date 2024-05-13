@@ -5,17 +5,16 @@ jupyter:
       extension: .md
       format_name: markdown
       format_version: '1.3'
-      jupytext_version: 1.15.2
+      jupytext_version: 1.14.5
   kernelspec:
-    display_name: Python 3 (ipykernel)
+    display_name: computer-vision
     language: python
-    name: python3
+    name: .venv
 ---
 
 ```python
 %load_ext autoreload
 %autoreload 2
-
 ```
 
 ```python
@@ -30,13 +29,14 @@ import csv
 import os
 import cv2
 
-device = 'cpu' # if cuda available
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 ```
 
 # Data Preparation
 
 ```python
-data_root = pathlib.Path('/DATA/data_coating')
+data_root = pathlib.Path('/home/jry/downloads/data_coating/dataset_03_no_oxidation/')
+csv_roi_path = data_root.parent / 'roi.csv'
 ```
 
 ```python
@@ -44,8 +44,8 @@ import scipy.ndimage as ndi
 from tqdm.auto import tqdm 
 
 #NEW function for loading the roi measurments into arr
-def roiread(image_test_names):
-    csv_roi_path = data_root / 'roi.csv'
+def roiread(csv_roi_path, image_test_names):
+    
     roi_arr = []
     
     for image_test_name in image_test_names:
@@ -89,7 +89,7 @@ def read_set(root,set_name):
     str_set_path = root/f'{set_name}'
     x_root = str_set_path/ f"{set_name}_x"
     #EDIT THIS
-    y_root = str_set_path/f"{set_name}_y_without_oxidation"
+    y_root = str_set_path/f"{set_name}_y"
     
     x_paths = list(x_root.glob("*.png"))
 
@@ -118,13 +118,16 @@ def read_set(root,set_name):
         
     return x,y_resized, image_names
 
+test_roi = roiread(csv_roi_path, image_test_names)
 test_imgs,test_masks, image_test_names = read_set(data_root, 'test')
 train_imgs,train_masks,image_train_names = read_set(data_root, 'train')
 
-test_roi = roiread(image_test_names)
-
 assert len(train_imgs) == len(train_masks)
+assert len(train_imgs) != 0
+
 assert len(test_imgs) == len(test_masks)
+assert len(test_imgs) != 0
+print(f"Success {len(train_imgs)=} {len(test_imgs)=}")
 ```
 
 # Augumentation
@@ -269,6 +272,8 @@ train_img_complete = train_imgs + augmented_train_images
 train_masks_complete = train_masks + augmented_train_masks
 
 assert len(train_img_complete) == len(train_masks_complete)
+assert len(train_img_complete) !=0 
+assert len(train_masks_complete) !=0
 
 ```
 
@@ -558,7 +563,7 @@ for k,v in loss_dict.items():
     plt.plot(v,label=k)
 
 best_epoch = np.argmin(loss_dict['val_loss'])
-plt.axvline(best_epoch,label=f'{best_epoch=}')
+plt.axvline(best_epoch,label=f'{best_epoch=}',c='r')
 plt.title("Loss Visualization")
 plt.legend()
 ```
