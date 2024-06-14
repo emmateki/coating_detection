@@ -315,49 +315,49 @@ def ensure_at_least_batch(data,batch_size):
 
 
 ```python editable=true slideshow={"slide_type": ""}
+def adjust_dataset_size(transform_fn_resize,patch_size,transform_fn):
 
-def augment_images(images, masks, transform_fn, color_inversion):
-    return prepare_augmented_dataset(images, masks, transform_fn, color_inversion)
-
-def split_dataset(images, masks, train_val_split):
-    val_size = int(len(images) * train_val_split)
-    train_size = len(images) - val_size
-    
-    train_images = images[:train_size]
-    train_masks = masks[:train_size]
-    
-    val_images = images[-val_size:]
-    val_masks = masks[-val_size:]
-    
-    return train_images, train_masks, val_images, val_masks
-
-def resize_and_ensure_batch_size(images, masks, batch_size):
-    images_resized = ensure_at_least_batch(images, batch_size)
-    masks_resized = ensure_at_least_batch(masks, batch_size)
-    return images_resized, masks_resized
-
-def create_data_loader(images, masks, transform_fn_resize, batch_size, shuffle):
-    dataset = Dataset(images, masks, transform_fn_resize)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-
-def adjust_dataset_size(transform_fn_resize, patch_size, transform_fn, train_imgs, train_masks, train_val_split, batch_size):
-    augmented_train_images, augmented_train_masks = augment_images(train_imgs, train_masks, transform_fn, color_inversion=False)
-    augmented_train_images_rev, augmented_train_masks_rev = augment_images(train_imgs, train_masks, transform_fn, color_inversion=True)
+    augmented_train_images, augmented_train_masks = prepare_augmented_dataset(train_imgs, train_masks,  transform_fn, color_inversion = False )
+    # ..._rev are augumented pictures with reverse colours
+    augmented_train_images_rev, augmented_train_masks_rev = prepare_augmented_dataset(train_imgs, train_masks, transform_fn, color_inversion = True)
 
     train_img_complete = train_imgs + augmented_train_images + augmented_train_images_rev
     train_masks_complete = train_masks + augmented_train_masks + augmented_train_masks_rev
     
     assert len(train_img_complete) == len(train_masks_complete)
 
-    just_train_imgs, just_train_masks, val_imgs, val_masks = split_dataset(train_img_complete, train_masks_complete, train_val_split)
+    val_size = int(len(train_img_complete) * train_val_split)
+    train_size = len(train_img_complete) - val_size
     
-    train_imgs_res, train_masks_res = resize_and_ensure_batch_size(just_train_imgs, just_train_masks, batch_size)
-    val_imgs_res, val_masks_res = resize_and_ensure_batch_size(val_imgs, val_masks, batch_size)
+    just_train_imgs = train_img_complete[:train_size]
+    just_train_masks = train_masks_complete[:train_size]
     
-    training_loader = create_data_loader(train_imgs_res, train_masks_res, transform_fn_resize, batch_size, shuffle=True)
-    validation_loader = create_data_loader(val_imgs_res, val_masks_res, transform_fn_resize, batch_size, shuffle=False)
+    val_imgs = train_img_complete[-val_size:]
+    val_imgs_res = ensure_at_least_batch(val_imgs,batch_size)
+
+
+    train_imgs_res = ensure_at_least_batch( just_train_imgs,batch_size)
+    train_masks_res = ensure_at_least_batch(just_train_masks,batch_size)
     
-    return training_loader, validation_loader
+    train_ds = Dataset(
+        train_imgs_res,
+        train_masks_res,
+        transform_fn_resize
+    )
+    training_loader = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True)
+    
+    val_masks = train_masks[-val_size:]
+    val_masks_res = ensure_at_least_batch(val_masks,batch_size)
+    
+    # There is no augumentation applied on val!
+    val_ds = Dataset(
+        train_imgs_res,
+        train_masks_res,
+        transform_fn_resize
+    )
+    validation_loader = torch.utils.data.DataLoader(val_ds, batch_size=32, shuffle=False)
+    
+    return training_loader,validation_loader
 ```
 
 ## Loss Function
@@ -373,7 +373,7 @@ class FocalLoss(nn.Module):
         self.gamma = gamma
         self.reduction = reduction
 
-    def forward(self, inputs,targets)a:
+    def forward(self, inputs,targets):
         # comment out if your model contains a sigmoid or equivalent activation layer
         # inputs = torch.sigmoid(inputs)
 
@@ -711,17 +711,18 @@ def loss_wrapper(pred, target_dict):
     return loss_fn(pred, target_dict['y']).mean()
 
 from sklearn.model_selection import ParameterGrid
-"""
+
 param_grid = {
     'depth': [3,4,5],
     'patch_size': [64, 128,256],
     'filters': [8,16,32]
-}"""
+}
+"""
 param_grid = {
     'depth': [5],
     'patch_size': [256],
     'filters': [16]
-}
+}"""
 
 for params in ParameterGrid(param_grid):
     depth = params['depth']
