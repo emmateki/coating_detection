@@ -5,7 +5,7 @@ jupyter:
       extension: .md
       format_name: markdown
       format_version: '1.3'
-      jupytext_version: 1.14.5
+      jupytext_version: 1.15.2
   kernelspec:
     display_name: computer-vision
     language: python
@@ -35,7 +35,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Data Preparation
 
 ```python
-data_root = pathlib.Path('/home/jry/downloads/data_coating/dataset_03_no_oxidation/')
+data_root = pathlib.Path('/home/tekulova/DATA/data_coating')
 csv_roi_path = data_root.parent / 'roi.csv'
 ```
 
@@ -43,29 +43,28 @@ csv_roi_path = data_root.parent / 'roi.csv'
 import scipy.ndimage as ndi
 from tqdm.auto import tqdm 
 
-#NEW function for loading the roi measurments into arr
-def roiread(csv_roi_path, image_test_names):
-    
-    roi_arr = []
-    
-    for image_test_name in image_test_names:
-        with open(csv_roi_path, 'r') as csvfile:
-            csv_reader = csv.reader(csvfile)
-            header = next(csv_reader)  # Skip first row - column names
-            
-            for row in csv_reader:
-                if row[1] == image_test_name:
+# loading the roi measurments into arr
+def roiread(image_test_names):
+    with open(csv_roi_path, 'r') as csvfile:
+        csv_reader = csv.reader(csvfile)
+        next(csv_reader)  # Skip the first row
 
-                    original_name = row[0]
-                    train_name = row[1]
-                    roi_file = row[2]
-                    x1 = row[3]
-                    x2 = row[4]
-                    y1 = int(row[5]) if row[5].strip().lower() != 'nan' else np.nan
-                    y2 = int(row[6]) if row[6].strip().lower() != 'nan'  else np.nan
-                    length = row[7]
-                    
-                    roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
+        all_rows = [row for row in csv_reader]
+
+    roi_arr = []
+    for row in all_rows:
+        if row[1] in image_test_names:
+            original_name = row[0]
+            train_name = row[1]
+            roi_file = row[2]
+            x1 = row[3]
+            x2 = row[4]
+            y1 = int(row[5]) if row[5].strip().lower() != 'nan' else np.nan
+            y2 = int(row[6]) if row[6].strip().lower() != 'nan' else np.nan
+            length = row[7]
+
+            roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
+
     return roi_arr
     
 def imread(p):
@@ -118,9 +117,10 @@ def read_set(root,set_name):
         
     return x,y_resized, image_names
 
-test_roi = roiread(csv_roi_path, image_test_names)
 test_imgs,test_masks, image_test_names = read_set(data_root, 'test')
 train_imgs,train_masks,image_train_names = read_set(data_root, 'train')
+
+test_roi = roiread(image_test_names)
 
 assert len(train_imgs) == len(train_masks)
 assert len(train_imgs) != 0
@@ -141,7 +141,7 @@ def setup_augmentation(
     patch_size,
     crop_or_resize,  # Option: 'crop' or 'resize'
     elastic=False,  # True
-    brightness_contrast=False,
+    brightness_contrast=True,
     flip_vertical=False,
     flip_horizontal=False,
     blur_sharp_power=None,  # 1
@@ -153,10 +153,9 @@ def setup_augmentation(
     if crop_or_resize == 'crop':
         patch_size_padded = int(patch_size * 1.5)
         transform_list.append(A.PadIfNeeded(patch_size_padded, patch_size_padded))
-        transform_list.append(A.RandomCrop(patch_size, patch_size))
+        transform_list.append(A.CropNonEmptyMaskIfExists(height=patch_size, width=patch_size, ignore_values=None, ignore_channels=None))
     elif crop_or_resize == 'resize':
         transform_list.append(A.Resize(height=patch_size, width=patch_size, interpolation=interpolation))
-
 
     if elastic:
         transform_list += [
@@ -214,7 +213,7 @@ transform_fn = setup_augmentation(
     patch_size,
     crop_or_resize='crop',
     elastic = True,
-    brightness_contrast=False,
+    brightness_contrast=True,
     flip_vertical=False, # Oxides never flip vertically
     flip_horizontal=True,
     blur_sharp_power=None, # hopefully microscopes don't differ in blur much
@@ -367,56 +366,6 @@ val_ds = Dataset(
     transform_fn_resize
 )
 validation_loader = torch.utils.data.DataLoader(val_ds, batch_size=32, shuffle=False)
-
-```
-
-```python
-
-'''
-import numpy as np
-import matplotlib.pyplot as plt
-
-def plot_images(dataset, num_images=10):
-    """
-    Plot a sample of images from the dataset.
-    
-    Args:
-        dataset (torch.utils.data.Dataset): Dataset containing images.
-        num_images (int): Number of images to plot.
-    """
-    plt.figure(figsize=(15, 8))
-    rows = (num_images // 5) + 1  # Calculate number of rows for subplots
-    
-    for i in range(num_images):
-        sample = dataset[i]  # Get a sample from the dataset
-        
-        # Access image and mask using correct keys
-        image = sample['x']  # Assuming 'image' is the key for the image
-        mask = sample['y']    # Assuming 'mask' is the key for the mask
-        
-        # Convert PyTorch tensor to NumPy array if necessary
-        if isinstance(image, np.ndarray):
-            image = image  # NumPy array
-        else:
-            image = image.squeeze().numpy()  # PyTorch tensor to NumPy array
-        
-        # Handle different image shapes
-        if image.ndim == 3 and image.shape[0] == 1:
-            image = image[0]  # Remove batch dimension for grayscale images
-        elif image.ndim == 3 and image.shape[0] == 3:
-            image = image.transpose(1, 2, 0)  # Reshape for RGB images
-        
-        plt.subplot(rows, 5, i + 1)  # Create subplot
-        plt.imshow(image)  # Display image
-        plt.title(f"Sample {i + 1}")  # Set subplot title
-        plt.axis('off')  # Turn off axis
-    
-    plt.tight_layout()
-    plt.show()
-
-# Assuming `train_dataset` is your training dataset
-plot_images(train_ds, num_images=32)  # Plot the first 32 images from the dataset
-'''
 
 ```
 
