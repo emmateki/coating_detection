@@ -611,8 +611,9 @@ def  eval_save(depth,patch_size,filters):
     mse_length = np.nanmean(np.square(length_diff))
     
     mean_iou = np.mean(results['IoU'])
-    
-    # Append results to a json file
+
+
+
     data = {
         "Depth": depth,
         "Patch size": patch_size,
@@ -626,18 +627,27 @@ def  eval_save(depth,patch_size,filters):
     }
     
     serializable_data = {k: convert_to_serializable(v) for k, v in data.items()}
-
-    with open('res.json', 'a') as f:
-        json.dump(serializable_data, f)
-        f.write('\n')
-
+    
+    # Load existing data
+    try:
+        with open('res.json', 'r') as f:
+            existing_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing_data = []
+    
+    # Append new data
+    existing_data.append(serializable_data)
+    
+    # Save updated data
+    with open('res.json', 'w') as f:
+        json.dump(existing_data, f, indent=4)
+            
 def convert_to_serializable(obj):
-    if isinstance(obj, np.float32):
+    if isinstance(obj, (np.float32, np.float64)):
         return float(obj)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     return obj
-
 ```
 
 ### Save predicted masks with roi lines
@@ -694,7 +704,7 @@ def save(depth,patch_size,filters):
         axs[1].imshow(mask)
         axs[2].imshow(pred)
         
-        plt.savefig(f'{fol_name}/plot_{i}_{depth}_{patch_size}_{filters}.png')
+        plt.savefig(f'{fol_name}/plot_{image_test_names [i]}_{depth}_{patch_size}_{filters}.png')
         plt.close(fig)
 ```
 
@@ -704,41 +714,39 @@ def save(depth,patch_size,filters):
 ```python editable=true slideshow={"slide_type": ""}
 from tqdm.contrib.logging import logging_redirect_tqdm
 import unet
+from sklearn.model_selection import ParameterGrid
 
-loss_fn = FocalLoss()
 
 def loss_wrapper(pred, target_dict):
     return loss_fn(pred, target_dict['y']).mean()
 
-from sklearn.model_selection import ParameterGrid
+loss_fn = FocalLoss()
 
+# Parameter grid for hyperparameter tuning
 param_grid = {
-    'depth': [3,4,5],
-    'patch_size': [64, 128,256],
-    'filters': [8,16,32]
+    'depth': [3, 4, 5],
+    'patch_size': [64, 128, 256],
+    'filters': [8, 16, 32]
 }
-"""
-param_grid = {
-    'depth': [5],
-    'patch_size': [256],
-    'filters': [16]
-}"""
+
+best_val_loss = float('inf')
+best_model_state = None
 
 for params in ParameterGrid(param_grid):
     depth = params['depth']
     patch_size = params['patch_size']
     filters = params['filters']
 
+    # Define transformation functions
     transform_fn, transform_fn_resize = define_transform_fn(patch_size)
 
-
+    # Adjust dataset size
     validation_loader, training_loader = adjust_dataset_size(transform_fn_resize, patch_size, transform_fn)
 
+    # Initialize model
     model = unet.UNet(depth=depth, in_channels=1, start_filters=filters)
-    
-    best_val_loss = float('inf')
-    best_model_state = None
-    
+
+    # Train model and log progress
     with logging_redirect_tqdm():
         loss_dict = train(
             model,
@@ -748,25 +756,27 @@ for params in ParameterGrid(param_grid):
             epochs=250,
             device=device
         )
-    
 
-    plot_loss()
+    # Plot loss curves
+    #plot_loss()
+
+    # Evaluate and save model
     eval_save(depth, patch_size, filters)
     save(depth, patch_size, filters)
 
-    current_val_loss = min(loss_dict['val_loss'])  # Assuming loss_dict['val_loss'] is a list of losses
-    
+    # Check for best validation loss
+    current_val_loss = min(loss_dict['val_loss'])
     if current_val_loss < best_val_loss:
         best_val_loss = current_val_loss
         best_model_state = model.state_dict().copy()
 
-    plot_loss()
-    eval_save(depth, patch_size, filters)
-    save(depth, patch_size, filters)
-
+# Save the best model state
 if best_model_state is not None:
+    os.makedirs("models", exist_ok=True)
     best_model_path = f"models/best_model_{depth}_{patch_size}_{filters}_rev.pth"
     torch.save(best_model_state, best_model_path)
+
+
 ```
 
 ```python
