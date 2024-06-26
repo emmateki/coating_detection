@@ -46,27 +46,28 @@ from tqdm.auto import tqdm
 # loading the roi measurments into arr
 def roiread(image_test_names):
     with open(csv_roi_path, 'r') as csvfile:
-        csv_reader = csv.reader(csvfile)
-        next(csv_reader)  # Skip the first row
+        csv_reader = csv.DictReader(csvfile)
+        data_list = list(csv_reader)
 
-        all_rows = [row for row in csv_reader]
+    # Sort the rows based on the 'train_name' column
+    data_list_sorted = sorted(data_list, key=lambda x: x['train_name'])
 
     roi_arr = []
-    for row in all_rows:
-        if row[1] in image_test_names:
-            original_name = row[0]
-            train_name = row[1]
-            roi_file = row[2]
-            x1 = row[3]
-            x2 = row[4]
-            y1 = int(row[5]) if row[5].strip().lower() != 'nan' else np.nan
-            y2 = int(row[6]) if row[6].strip().lower() != 'nan' else np.nan
-            length = row[7]
-
-            roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
-
-    return roi_arr
+    for test_name in image_test_names:
+        for row in data_list_sorted:
+            if row['train_name'] == test_name:
+                original_name = row['original_name']
+                train_name = row['train_name']
+                roi_file = row['roi_file']
+                x1 = row['x1']
+                x2 = row['x2']
+                y1 = int(row['y1']) if row['y1'].strip().lower() != 'nan' else np.nan
+                y2 = int(row['y2']) if row['y2'].strip().lower() != 'nan' else np.nan
+                length = row['length']
     
+                roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
+    return roi_arr
+
 def imread(p):
     img = imageio.imread(p)
     if img.ndim == 3:
@@ -87,7 +88,7 @@ def imread_mask(p):
 def read_set(root,set_name):
     str_set_path = root/f'{set_name}'
     x_root = str_set_path/ f"{set_name}_x"
-    #EDIT THIS
+
     y_root = str_set_path/f"{set_name}_y"
     
     x_paths = list(x_root.glob("*.png"))

@@ -6,7 +6,7 @@ from pathlib import Path
 import argparse
 
 
-def create_line_roi(imageWidth, imageHeight, num_lines, output_dir,image_path):
+def create_line_roi(imageWidth, imageHeight, output_dir, image_path,  num_lines=10, num_lines_per_row=10, y1_default=100, y2_default=50, float_stroke_width=5.0, space_between_rows=200):
     """
     Create lines (ROIs) and store them in a zip file. 
 
@@ -20,42 +20,46 @@ def create_line_roi(imageWidth, imageHeight, num_lines, output_dir,image_path):
         imageHeight (int): Height of the image canvas.
         num_lines (int): Number of lines ROIs to create.
         output_dir (str): Directory where the ROI files and the zip archive will be stored.
-        
+        num_lines_per_row (int): Number of lines per row. Default is 10.
+        y1_default (int): Default starting y-coordinate for the first set of ROIs. 
+        y2_default (int): Default ending y-coordinate for the first set of ROIs. 
+        float_stroke_width (float): Stroke width for the lines. Default is 5.0.
+        space_between_rows (int): Space between rows. Default is 200.
+
     Returns:
         None
     """
     # Calculate the space between lines based on image width
-    space_between_lines = imageWidth / 10 
+    space_between_lines = imageWidth / num_lines_per_row
     # Array for saving the roi file paths
-    roi_files = []  
-    
-    y1 = 100
-    y2 = 50
+    roi_files = []
 
-    x = 0
+    no_of_line = 0
 
     for i in range(num_lines):  # Generate 10 lines per row
-        if i % 10 == 0 and i != 0:  # Move to the next row every 10 lines (excluding the first iteration)
-            y1 += 200
-            y2 += 200
+        # Move to the next row every 10 lines (excluding the first iteration)
+        if i % num_lines_per_row == 0 and i != 0:
+            y1_default += space_between_rows
+            y2_default += space_between_rows
             x = 0  # Reset x-coordinate for each new row
-        x1 = int( space_between_lines / 2 + (x * space_between_lines))
-        x += 1
+        x1 = int(space_between_lines / 2 + (x * space_between_lines))
+        no_of_line += 1
         # Create a line ROI object
         roi = roifile.ImagejRoi(
             roitype=roifile.ROI_TYPE.LINE,
-            name=str(i + 1),  # Adjust name to ensure unique names across all rows
+            # Adjust name to ensure unique names across all rows
+            name=str(i + 1),
             x1=x1,
-            y1=y1,
+            y1=y1_default,
             x2=x1,
-            y2=y2,
-            float_stroke_width=5.0,
+            y2=y2_default,
+            float_stroke_width=float_stroke_width,
         )
         # Define the path for saving the ROI file
         roi_path = Path(output_dir) / f"{i + 1}.roi"
         roi.tofile(roi_path)
         # Store the ROI file path for later removal
-        roi_files.append(roi_path)  
+        roi_files.append(roi_path)
 
     # Create a zip file containing the ROI files
     image_name = Path(image_path).stem
@@ -67,6 +71,7 @@ def create_line_roi(imageWidth, imageHeight, num_lines, output_dir,image_path):
     # Remove the individual ROI files
     for roi_path in roi_files:
         roi_path.unlink()
+
 
 def main(image_path):
     """
@@ -86,18 +91,15 @@ def main(image_path):
     # Open the image and get its dimensions
     image = Image.open(image_path)
     imageWidth, imageHeight = image.size
-    # Number of line ROIs to generate
-    num_lines = 30
+
     # Generate line ROIs on the image and save as a zip archive
-    create_line_roi(imageWidth, imageHeight, num_lines, output_dir,image_path)
+    create_line_roi(imageWidth, imageHeight, output_dir, image_path)
+
 
 if __name__ == "__main__":
-    # Create an ArgumentParser instance
-    parser = argparse.ArgumentParser(description="Create line ROIs on an image and save as a zip archive")
-    # Add an argument for the input image path
-    parser.add_argument("image_path", type=str, help="Path to the input image file")
-    # Parse the command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Create line ROIs on an image and save as a zip archive")
+    parser.add_argument("image_path", type=str,
+                        help="Path to the input image file")
     args = parser.parse_args()
-    # Call the main function with the parsed image path
     main(args.image_path)
-
