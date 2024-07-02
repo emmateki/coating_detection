@@ -48,29 +48,32 @@ from tqdm.auto import tqdm
 # loading the roi measurments into arr
 
 
-def roiread(image_test_names):
-    with open(csv_roi_path, "r") as csvfile:
-        csv_reader = csv.reader(csvfile)
-        next(csv_reader)  # Skip the first row
+def roiread(image_test_names):  # loading the roi measurments into arr
+    with open(csv_roi_path, 'r') as csvfile:
+        csv_reader = csv.DictReader(csvfile)
+        data_list = list(csv_reader)
 
-        all_rows = [row for row in csv_reader]
+    # Sort the rows based on the 'train_name' column
+    data_list_sorted = sorted(data_list, key=lambda x: x['train_name'])
 
     roi_arr = []
-    for row in all_rows:
-        if row[1] in image_test_names:
-            original_name = row[0]
-            train_name = row[1]
-            roi_file = row[2]
-            x1 = row[3]
-            x2 = row[4]
-            y1 = int(row[5]) if row[5].strip().lower() != "nan" else np.nan
-            y2 = int(row[6]) if row[6].strip().lower() != "nan" else np.nan
-            length = row[7]
+    for test_name in image_test_names:
+        for row in data_list_sorted:
+            # retype 01 -> 1
+            if int(row['train_name']) == int(test_name):
+                original_name = row['original_name']
+                train_name = row['train_name']
+                roi_file = row['roi_file']
+                x1 = row['x1']
+                x2 = row['x2']
+                y1 = int(row['y1']) if row['y1'].strip(
+                ).lower() != 'nan' else np.nan
+                y2 = int(row['y2']) if row['y2'].strip(
+                ).lower() != 'nan' else np.nan
+                length = row['length']
 
-            roi_arr.append(
-                [original_name, train_name, roi_file, x1, x2, y1, y2, length]
-            )
-
+                roi_arr.append([original_name, train_name,
+                               roi_file, x1, x2, y1, y2, length])
     return roi_arr
 
 
@@ -95,7 +98,7 @@ def imread_mask(p):
 def read_set(root, set_name):
     str_set_path = root / f"{set_name}"
     x_root = str_set_path / f"{set_name}_x"
-    # EDIT THIS
+
     y_root = str_set_path / f"{set_name}_y"
 
     x_paths = list(x_root.glob("*.png"))
@@ -109,7 +112,8 @@ def read_set(root, set_name):
     # casting to npfloat
     x_iter = map(imread, x_paths)
 
-    y = tqdm(map(imread_mask, y_paths), total=len(x_paths), desc=f"Reading {set_name}")
+    y = tqdm(map(imread_mask, y_paths), total=len(
+        x_paths), desc=f"Reading {set_name}")
 
     # HACK : resizing y to have same dimensions as x
     y_resized = []
@@ -163,21 +167,15 @@ def setup_augmentation(
     interpolation=2,  # constant representing cv2.INTER_CUBIC
 ):
     transform_list = []
-    if crop_or_resize == "crop":
+    if crop_or_resize == 'crop':
         patch_size_padded = int(patch_size * 1.5)
-        transform_list.append(A.PadIfNeeded(patch_size_padded, patch_size_padded))
+        transform_list.append(A.PadIfNeeded(
+            patch_size_padded, patch_size_padded))
+        transform_list.append(A.CropNonEmptyMaskIfExists(
+            height=patch_size, width=patch_size, ignore_values=None, ignore_channels=None))
+    elif crop_or_resize == 'resize':
         transform_list.append(
-            A.CropNonEmptyMaskIfExists(
-                height=patch_size,
-                width=patch_size,
-                ignore_values=None,
-                ignore_channels=None,
-            )
-        )
-    elif crop_or_resize == "resize":
-        transform_list.append(
-            A.Resize(height=patch_size, width=patch_size, interpolation=interpolation)
-        )
+            A.Resize(height=patch_size, width=patch_size, interpolation=interpolation))
 
     if elastic:
         transform_list.append(
@@ -273,7 +271,8 @@ def prepare_augmented_dataset(images, masks, transform_fn, color_inversion):
         transformed = transform_fn(image=img, mask=mask)
 
         if color_inversion:
-            transformed_image = A.InvertImg(p=0.5)(image=transformed["image"])["image"]
+            transformed_image = A.InvertImg(p=0.5)(
+                image=transformed["image"])["image"]
         else:
             transformed_image = transformed["image"]
 
@@ -353,17 +352,12 @@ def adjust_dataset_size(transform_fn_resize, patch_size, transform_fn):
     just_train_imgs = train_img_complete[:train_size]
     just_train_masks = train_masks_complete[:train_size]
 
-    val_imgs = train_img_complete[-val_size:]
-    val_imgs_res = ensure_at_least_batch(val_imgs, batch_size)
-
     train_imgs_res = ensure_at_least_batch(just_train_imgs, batch_size)
     train_masks_res = ensure_at_least_batch(just_train_masks, batch_size)
 
     train_ds = Dataset(train_imgs_res, train_masks_res, transform_fn_resize)
-    training_loader = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True)
-
-    val_masks = train_masks[-val_size:]
-    val_masks_res = ensure_at_least_batch(val_masks, batch_size)
+    training_loader = torch.utils.data.DataLoader(
+        train_ds, batch_size=32, shuffle=True)
 
     # There is no augumentation applied on val!
     val_ds = Dataset(train_imgs_res, train_masks_res, transform_fn_resize)
@@ -484,14 +478,17 @@ def step(model, targets, loss_fn, device="cpu"):
 ```
 
 ```python editable=true slideshow={"slide_type": ""}
-def plot_loss():
+def plot_loss(depth, patch_size, filters):
     for k, v in loss_dict.items():
         plt.plot(v, label=k)
 
-    best_epoch = np.argmin(loss_dict["val_loss"])
-    plt.axvline(best_epoch, label=f"{best_epoch=}")
+    best_epoch = np.argmin(loss_dict['val_loss'])
+    plt.axvline(best_epoch, label=f'{best_epoch=}')
     plt.title("Loss Visualization")
     plt.legend()
+    os.makedirs('LossOLD', exist_ok=True)
+    plt.savefig(f'LossOLD/loss_{depth}_{patch_size}_{filters}.png')
+    plt.close()
 ```
 
 # Evaluation
@@ -515,16 +512,16 @@ def pad_to(x, stride):
 
     # zero-padding by default.
     # See others at https://pytorch.org/docs/stable/nn.functional.html#torch.nn.functional.pad
-    out = F.pad(x, pads, "constant", 0)
+    out = F.pad(x, pads, "reflect")
 
     return out, pads
 
 
 def unpad(x, pad):
     if pad[2] + pad[3] > 0:
-        x = x[:, :, pad[2] : -pad[3], :]
+        x = x[:, :, pad[2]: -pad[3], :]
     if pad[0] + pad[1] > 0:
-        x = x[:, :, :, pad[0] : -pad[1]]
+        x = x[:, :, :, pad[0]: -pad[1]]
     return x
 ```
 
@@ -574,10 +571,12 @@ def process_roi_row(roi_row, inference):
     y_col = inference[:, int(x1)]
 
     y_found_start, y_found_end = (
-        find_start_end_positions(y_col) if not torch.all(y_col == 0) else (0, 0)
+        find_start_end_positions(y_col) if not torch.all(
+            y_col == 0) else (0, 0)
     )
 
-    length_diff = calculate_length_difference(y_found_start, y_found_end, int(length))
+    length_diff = calculate_length_difference(
+        y_found_start, y_found_end, int(length))
     start_diff = abs(y1 - y_found_start) if not np.isnan(y1) else np.nan
     end_diff = abs(y2 - y_found_end) if not np.isnan(y2) else np.nan
 
@@ -590,7 +589,8 @@ def evaluate_1d(test_roi, inferences):
 
     for num, inference in enumerate(infs_trans):
         for i in range(num * 10, num * 10 + 10):
-            start_diff, end_diff, length_diff = process_roi_row(test_roi[i], inference)
+            start_diff, end_diff, length_diff = process_roi_row(
+                test_roi[i], inference)
             start_diffs.append(start_diff)
             end_diffs.append(end_diff)
             length_diffs.append(length_diff)
@@ -611,7 +611,7 @@ def predict(img, model, device, pad_stride=32):
     return res_unp_binary.squeeze(0).squeeze(0)
 
 
-def eval_save(depth, patch_size, filters):
+def eval_save(depth, patch_size, filters, loss):
     with torch.no_grad():
         predictions = [predict(img, model, device) for img in test_imgs]
     # test_masks to binary tensors as well
@@ -647,9 +647,11 @@ def eval_save(depth, patch_size, filters):
         "Length diff": length_diff_total,
         "MSE of diffs in start and end": mse_start_end,
         "MSE of Length": mse_length,
+        "Loss": loss
     }
 
-    serializable_data = {k: convert_to_serializable(v) for k, v in data.items()}
+    serializable_data = {k: convert_to_serializable(
+        v) for k, v in data.items()}
 
     # Load existing data
     try:
@@ -728,7 +730,8 @@ def save(depth, patch_size, filters):
         axs[2].imshow(pred)
 
         plt.savefig(
-            f"{fol_name}/plot_{image_test_names[i]}_{depth}_{patch_size}_{filters}.png"
+            f"{fol_name}/plot_{image_test_names[i]
+                               }_{depth}_{patch_size}_{filters}.png"
         )
         plt.close(fig)
 ```
@@ -749,7 +752,8 @@ def loss_wrapper(pred, target_dict):
 loss_fn = FocalLoss()
 
 # Parameter grid for hyperparameter tuning
-param_grid = {"depth": [3, 4, 5], "patch_size": [64, 128, 256], "filters": [8, 16, 32]}
+param_grid = {"depth": [3, 4, 5], "patch_size": [
+    64, 128, 256], "filters": [8, 16, 32]}
 
 best_val_loss = float("inf")
 best_model_state = None
@@ -782,10 +786,10 @@ for params in ParameterGrid(param_grid):
         )
 
     # Plot loss curves
-    # plot_loss()
+    plot_loss(depth, patch_size, filters)
 
     # Evaluate and save model
-    eval_save(depth, patch_size, filters)
+    eval_save(depth, patch_size, filters, min(loss_dict['val_loss']))
     save(depth, patch_size, filters)
 
     # Check for best validation loss
@@ -794,12 +798,12 @@ for params in ParameterGrid(param_grid):
         best_val_loss = current_val_loss
         best_model_state = model.state_dict().copy()
 
-# Save the best model state
-if best_model_state is not None:
-    os.makedirs("models", exist_ok=True)
-    best_model_path = f"models/best_model_{
-        depth}_{patch_size}_{filters}_rev.pth"
-    torch.save(best_model_state, best_model_path)
+    # Save the best model state
+    if best_model_state is not None:
+        os.makedirs("models_OLD", exist_ok=True)
+        best_model_path = f"models_OLD/best_model_{
+            depth}_{patch_size}_{filters}.pth"
+        torch.save(best_model_state, best_model_path)
 ```
 
 ```python
