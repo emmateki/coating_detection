@@ -5,7 +5,7 @@ jupyter:
       extension: .md
       format_name: markdown
       format_version: '1.3'
-      jupytext_version: 1.16.1
+      jupytext_version: 1.15.2
   kernelspec:
     display_name: Python 3 (ipykernel)
     language: python
@@ -618,9 +618,7 @@ def predict(img, model, device, pad_stride=32):
     return res_unp_binary.squeeze(0).squeeze(0)
 
 
-def eval_save(depth, patch_size, filters, loss):
-    with torch.no_grad():
-        predictions = [predict(img, model, device) for img in test_imgs]
+def eval_save(depth, patch_size, filters, loss, preds):
     # test_masks to binary tensors as well
     mask_arrays = [np.array(mask) for mask in test_masks]
     dtype = torch.float32
@@ -628,10 +626,10 @@ def eval_save(depth, patch_size, filters, loss):
 
     # Evaluate whole area
     metrics = {"IoU": JaccardIndex(task="multiclass", num_classes=2)}
-    results = evaluate_2d(mask_tensors, predictions, metrics, device)
+    results = evaluate_2d(mask_tensors, preds, metrics, device)
 
     # Evaluate ROI
-    start_end_diffs, length_diff = evaluate_1d(test_roi, predictions)
+    start_end_diffs, length_diff = evaluate_1d(test_roi, preds)
 
     success = np.sum(~np.isnan(start_end_diffs)) / len(start_end_diffs)
     total_diffs = np.nanmean(start_end_diffs)
@@ -718,12 +716,9 @@ for prediction_index, prediction in enumerate(predictions):
 
 
 ```python editable=true slideshow={"slide_type": ""}
-def save(depth, patch_size, filters):
+def save(depth, patch_size, filters, preds):
     fol_name = f"results_pics/Pred_{depth}_{patch_size}_{filters}"
     os.makedirs(fol_name, exist_ok=True)
-
-    with torch.no_grad():
-        preds = [predict(img, model, device) for img in test_imgs]
 
     for i, (img, mask, pred) in enumerate(zip(test_imgs, test_masks, preds)):
         fig, axs = plt.subplots(1, 3, figsize=(21, 7))
@@ -739,8 +734,50 @@ def save(depth, patch_size, filters):
         plt.close(fig)
 ```
 
-## Training
+## Post- processing
+The post-Processing will be applied in Fiji during prediscion so in api.py. For evaluation reason the same postProcessing will be added here.
 
+```python
+
+def post_processing(preds):
+    processed_preds = []
+    for binary_mask in preds:
+        binary_mask = binary_mask.squeeze().numpy()
+    
+        # Label the clusters
+        labeled_mask, num_clusters = ndi.label(binary_mask)
+    
+        cluster_areas = ndi.sum(binary_mask, labeled_mask, range(1, num_clusters+1))
+    
+        largest_cluster_touching_borders = 0
+        largest_cluster_area = 0
+    
+        for cluster_idx in range(1, num_clusters + 1):
+            cluster_mask = (labeled_mask == cluster_idx)
+            
+            # Check if the cluster touches both the left and right borders
+            touches_left = cluster_mask[:, 0].any()
+            touches_right = cluster_mask[:, -1].any()
+            
+            if touches_left and touches_right:
+                area = cluster_areas[cluster_idx - 1]
+                if area > largest_cluster_area:
+                    largest_cluster_touching_borders = cluster_idx
+                    largest_cluster_area = area
+    
+        if largest_cluster_touching_borders > 0:
+            #  the largest cluster that touches both borders
+            largest_cluster = largest_cluster_touching_borders
+        else:
+            largest_cluster = cluster_areas.argmax() + 1
+    
+        processed_mask = (labeled_mask == largest_cluster)
+        processed_preds.append(torch.tensor(processed_mask, dtype=torch.float32))
+        
+    return processed_preds
+```
+
+## Training
 
 ```python editable=true slideshow={"slide_type": ""}
 from tqdm.contrib.logging import logging_redirect_tqdm
@@ -786,13 +823,20 @@ for params in ParameterGrid(param_grid):
             epochs=250,
             device=device,
         )
+    #prediction
+    with torch.no_grad():
+        preds = [predict(img, model, device) for img in test_imgs]
+
 
     # Plot loss curves
     plot_loss(depth, patch_size, filters)
 
+    # creation mask with post processing
+    preds = post_processing(preds)
+
     # Evaluate and save model
-    eval_save(depth, patch_size, filters, min(loss_dict["val_loss"]))
-    save(depth, patch_size, filters)
+    eval_save(depth, patch_size, filters, min(loss_dict["val_loss"]), preds)
+    save(depth, patch_size, filters, preds)
 
     # Check for best validation loss
     current_val_loss = min(loss_dict["val_loss"])
