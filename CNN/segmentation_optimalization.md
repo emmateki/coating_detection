@@ -5,7 +5,7 @@ jupyter:
       extension: .md
       format_name: markdown
       format_version: '1.3'
-      jupytext_version: 1.15.2
+      jupytext_version: 1.16.1
   kernelspec:
     display_name: Python 3 (ipykernel)
     language: python
@@ -27,6 +27,9 @@ from torchmetrics import JaccardIndex
 import csv
 import os
 import json
+import segmentation_models_pytorch
+from segmentation_models_pytorch import Unet
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ```
@@ -741,16 +744,15 @@ def save(depth, patch_size, filters):
 
 ```python editable=true slideshow={"slide_type": ""}
 from tqdm.contrib.logging import logging_redirect_tqdm
-import unet
 from sklearn.model_selection import ParameterGrid
 
 
 def loss_wrapper(pred, target_dict):
+    pred = torch.sigmoid(pred)  # Apply sigmoid activation to ensure predictions are in [0, 1]
     return loss_fn(pred, target_dict["y"]).mean()
 
 
 loss_fn = FocalLoss()
-
 # Parameter grid for hyperparameter tuning
 param_grid = {"depth": [3, 4, 5], "patch_size": [64, 128, 256], "filters": [8, 16, 32]}
 
@@ -768,8 +770,11 @@ for params in ParameterGrid(param_grid):
     # Adjust dataset size
     validation_loader, training_loader = adjust_dataset_size(transform_fn_resize, patch_size, transform_fn)
 
+    # Compute decoder channels based on depth and filters
+    decoder_channels = [filters * 2**i for i in range(depth, 0, -1)]
+
     # Initialize model
-    model = unet.UNet(depth=depth, in_channels=1, start_filters=filters)
+    model = Unet(encoder_depth=depth, encoder_weights="imagenet", in_channels=1, decoder_channels=decoder_channels)
 
     # Train model and log progress
     with logging_redirect_tqdm():
