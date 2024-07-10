@@ -45,35 +45,53 @@ csv_roi_path = data_root / "roi.csv"
 import scipy.ndimage as ndi
 from tqdm.auto import tqdm
 
-# loading the roi measurments into arr
 
+def roiread(image_test_names):
+    """
+    Reads ROI (Region of Interest) measurements from a CSV file and filters them based on given image test names and then save data into array.
 
-def roiread(image_test_names):  # loading the roi measurments into arr
-    with open(csv_roi_path, 'r') as csvfile:
+    Reads contents of csv file into a list - dictionary, sorts this by the 'train_name' column (for quicker itertion),
+    and then iterates over the sorted list to find and reformat ROI data for each specified test name in 'image_test_names'.
+    If a match is found, it collects the ROI data, including handling 'nan' values for 'y1' and 'y2' by converting them to numpy.nan.
+
+    Parameters:
+    - image_test_names (list of str): A list of test names to filter the ROI data by.
+
+    Returns:
+    - list of lists: A list containing the filtered ROI data. Each element of the list is another list with the following elements:
+        - original_name (str): The original name of the image.
+        - train_name (str): The training name associated with the image.
+        - roi_file (str): The file name of the ROI. (01,02,...)
+        - x1 (str): The x-coordinate of the top of the line of the ROI.
+        - x2 (str): The x-coordinate of the bottom of the line of the ROI.
+        - y1 (int or numpy.nan): The y-coordinate of the top of the line of the ROI, converted to an integer or numpy.nan if 'nan'.
+        - y2 (int or numpy.nan): The y-coordinate of the bottom of the line corner of the ROI, converted to an integer or numpy.nan if 'nan'.
+        - length (str): The length of the ROI. y2-y1.
+    """
+    roi_arr = []
+    with open(csv_roi_path, "r") as csvfile:
         csv_reader = csv.DictReader(csvfile)
         data_list = list(csv_reader)
 
-    # Sort the rows based on the 'train_name' column
-    data_list_sorted = sorted(data_list, key=lambda x: x['train_name'])
+    # cast image_test_names to integers
+    names_set = [int(name) for name in image_test_names]
+    # Create a dictionary to map train_name (as integer) to its index in names_set
+    name_to_index = {name: index for index, name in enumerate(names_set)}
+    # Sort data_list based on the order in image_test_names (or names_set)
+    data_list_sorted = sorted(data_list, key=lambda x: name_to_index.get(int(x["train_name"]), float("inf")))
+    the_good_rows = (r for r in data_list_sorted if int(r["train_name"]) in names_set)
 
-    roi_arr = []
-    for test_name in image_test_names:
-        for row in data_list_sorted:
-            # retype 01 -> 1
-            if int(row['train_name']) == int(test_name):
-                original_name = row['original_name']
-                train_name = row['train_name']
-                roi_file = row['roi_file']
-                x1 = row['x1']
-                x2 = row['x2']
-                y1 = int(row['y1']) if row['y1'].strip(
-                ).lower() != 'nan' else np.nan
-                y2 = int(row['y2']) if row['y2'].strip(
-                ).lower() != 'nan' else np.nan
-                length = row['length']
+    for row in the_good_rows:
+        original_name = row["original_name"]
+        train_name = row["train_name"]
+        roi_file = row["roi_file"]
+        x1 = row["x1"]
+        x2 = row["x2"]
+        y1 = int(row["y1"]) if row["y1"].strip().lower() != "nan" else np.nan
+        y2 = int(row["y2"]) if row["y2"].strip().lower() != "nan" else np.nan
+        length = row["length"]
 
-                roi_arr.append([original_name, train_name,
-                               roi_file, x1, x2, y1, y2, length])
+        roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
     return roi_arr
 
 
@@ -112,8 +130,7 @@ def read_set(root, set_name):
     # casting to npfloat
     x_iter = map(imread, x_paths)
 
-    y = tqdm(map(imread_mask, y_paths), total=len(
-        x_paths), desc=f"Reading {set_name}")
+    y = tqdm(map(imread_mask, y_paths), total=len(x_paths), desc=f"Reading {set_name}")
 
     # HACK : resizing y to have same dimensions as x
     y_resized = []
@@ -167,15 +184,17 @@ def setup_augmentation(
     interpolation=2,  # constant representing cv2.INTER_CUBIC
 ):
     transform_list = []
-    if crop_or_resize == 'crop':
-        patch_size_padded = int(patch_size * 1.5)
-        transform_list.append(A.PadIfNeeded(
-            patch_size_padded, patch_size_padded))
-        transform_list.append(A.CropNonEmptyMaskIfExists(
-            height=patch_size, width=patch_size, ignore_values=None, ignore_channels=None))
-    elif crop_or_resize == 'resize':
-        transform_list.append(
-            A.Resize(height=patch_size, width=patch_size, interpolation=interpolation))
+    match crop_or_resize:
+        case "crop":
+            patch_size_padded = int(patch_size * 1.5)
+            transform_list.append(A.PadIfNeeded(patch_size_padded, patch_size_padded))
+            transform_list.append(
+                A.CropNonEmptyMaskIfExists(
+                    height=patch_size, width=patch_size, ignore_values=None, ignore_channels=None
+                )
+            )
+        case "resize":
+            transform_list.append(A.Resize(height=patch_size, width=patch_size, interpolation=interpolation))
 
     if elastic:
         transform_list.append(
@@ -242,9 +261,7 @@ def define_transform_fn(patch_size):
         noise_val=0.01,
     )
 
-    transform_fn_resize = setup_augmentation(
-        patch_size=patch_size, crop_or_resize="resize"
-    )
+    transform_fn_resize = setup_augmentation(patch_size=patch_size, crop_or_resize="resize")
 
     return transform_fn, transform_fn_resize
 ```
@@ -271,8 +288,7 @@ def prepare_augmented_dataset(images, masks, transform_fn, color_inversion):
         transformed = transform_fn(image=img, mask=mask)
 
         if color_inversion:
-            transformed_image = A.InvertImg(p=0.5)(
-                image=transformed["image"])["image"]
+            transformed_image = A.InvertImg(p=0.5)(image=transformed["image"])["image"]
         else:
             transformed_image = transformed["image"]
 
@@ -337,12 +353,8 @@ def adjust_dataset_size(transform_fn_resize, patch_size, transform_fn):
         train_imgs, train_masks, transform_fn, color_inversion=True
     )
 
-    train_img_complete = (
-        train_imgs + augmented_train_images + augmented_train_images_rev
-    )
-    train_masks_complete = (
-        train_masks + augmented_train_masks + augmented_train_masks_rev
-    )
+    train_img_complete = train_imgs + augmented_train_images + augmented_train_images_rev
+    train_masks_complete = train_masks + augmented_train_masks + augmented_train_masks_rev
 
     assert len(train_img_complete) == len(train_masks_complete)
 
@@ -356,14 +368,11 @@ def adjust_dataset_size(transform_fn_resize, patch_size, transform_fn):
     train_masks_res = ensure_at_least_batch(just_train_masks, batch_size)
 
     train_ds = Dataset(train_imgs_res, train_masks_res, transform_fn_resize)
-    training_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=32, shuffle=True)
+    training_loader = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True)
 
     # There is no augumentation applied on val!
     val_ds = Dataset(train_imgs_res, train_masks_res, transform_fn_resize)
-    validation_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=32, shuffle=False
-    )
+    validation_loader = torch.utils.data.DataLoader(val_ds, batch_size=32, shuffle=False)
 
     return training_loader, validation_loader
 ```
@@ -482,12 +491,12 @@ def plot_loss(depth, patch_size, filters):
     for k, v in loss_dict.items():
         plt.plot(v, label=k)
 
-    best_epoch = np.argmin(loss_dict['val_loss'])
-    plt.axvline(best_epoch, label=f'{best_epoch=}')
+    best_epoch = np.argmin(loss_dict["val_loss"])
+    plt.axvline(best_epoch, label=f"{best_epoch=}")
     plt.title("Loss Visualization")
     plt.legend()
-    os.makedirs('LossOLD', exist_ok=True)
-    plt.savefig(f'LossOLD/loss_{depth}_{patch_size}_{filters}.png')
+    os.makedirs("LossOLD", exist_ok=True)
+    plt.savefig(f"LossOLD/loss_{depth}_{patch_size}_{filters}.png")
     plt.close()
 ```
 
@@ -519,9 +528,9 @@ def pad_to(x, stride):
 
 def unpad(x, pad):
     if pad[2] + pad[3] > 0:
-        x = x[:, :, pad[2]: -pad[3], :]
+        x = x[:, :, pad[2] : -pad[3], :]
     if pad[0] + pad[1] > 0:
-        x = x[:, :, :, pad[0]: -pad[1]]
+        x = x[:, :, :, pad[0] : -pad[1]]
     return x
 ```
 
@@ -570,27 +579,22 @@ def process_roi_row(roi_row, inference):
     x1, x2, y1, y2, length = map(float, roi_row[3:8])
     y_col = inference[:, int(x1)]
 
-    y_found_start, y_found_end = (
-        find_start_end_positions(y_col) if not torch.all(
-            y_col == 0) else (0, 0)
-    )
+    y_found_start, y_found_end = find_start_end_positions(y_col) if not torch.all(y_col == 0) else (0, 0)
 
-    length_diff = calculate_length_difference(
-        y_found_start, y_found_end, int(length))
+    length_diff = calculate_length_difference(y_found_start, y_found_end, int(length))
     start_diff = abs(y1 - y_found_start) if not np.isnan(y1) else np.nan
     end_diff = abs(y2 - y_found_end) if not np.isnan(y2) else np.nan
 
     return start_diff, end_diff, length_diff
 
 
-def evaluate_1d(test_roi, inferences):
+def evaluate_1d(test_roi, inferences, num_of_lines_pre_row=10):
     infs_trans = [_transform(infc) for infc in inferences]
     start_diffs, end_diffs, length_diffs = [], [], []
 
     for num, inference in enumerate(infs_trans):
-        for i in range(num * 10, num * 10 + 10):
-            start_diff, end_diff, length_diff = process_roi_row(
-                test_roi[i], inference)
+        for i in range(num * num_of_lines_pre_row, num * num_of_lines_pre_row + num_of_lines_pre_row):
+            start_diff, end_diff, length_diff = process_roi_row(test_roi[i], inference)
             start_diffs.append(start_diff)
             end_diffs.append(end_diff)
             length_diffs.append(length_diff)
@@ -617,10 +621,7 @@ def eval_save(depth, patch_size, filters, loss):
     # test_masks to binary tensors as well
     mask_arrays = [np.array(mask) for mask in test_masks]
     dtype = torch.float32
-    mask_tensors = [
-        torch.tensor((mask > 0.5).astype(np.float32), dtype=dtype)
-        for mask in mask_arrays
-    ]
+    mask_tensors = [torch.tensor((mask > 0.5).astype(np.float32), dtype=dtype) for mask in mask_arrays]
 
     # Evaluate whole area
     metrics = {"IoU": JaccardIndex(task="multiclass", num_classes=2)}
@@ -647,11 +648,10 @@ def eval_save(depth, patch_size, filters, loss):
         "Length diff": length_diff_total,
         "MSE of diffs in start and end": mse_start_end,
         "MSE of Length": mse_length,
-        "Loss": loss
+        "Loss": loss,
     }
 
-    serializable_data = {k: convert_to_serializable(
-        v) for k, v in data.items()}
+    serializable_data = {k: convert_to_serializable(v) for k, v in data.items()}
 
     # Load existing data
     try:
@@ -752,8 +752,7 @@ def loss_wrapper(pred, target_dict):
 loss_fn = FocalLoss()
 
 # Parameter grid for hyperparameter tuning
-param_grid = {"depth": [3, 4, 5], "patch_size": [
-    64, 128, 256], "filters": [8, 16, 32]}
+param_grid = {"depth": [3, 4, 5], "patch_size": [64, 128, 256], "filters": [8, 16, 32]}
 
 best_val_loss = float("inf")
 best_model_state = None
@@ -767,9 +766,7 @@ for params in ParameterGrid(param_grid):
     transform_fn, transform_fn_resize = define_transform_fn(patch_size)
 
     # Adjust dataset size
-    validation_loader, training_loader = adjust_dataset_size(
-        transform_fn_resize, patch_size, transform_fn
-    )
+    validation_loader, training_loader = adjust_dataset_size(transform_fn_resize, patch_size, transform_fn)
 
     # Initialize model
     model = unet.UNet(depth=depth, in_channels=1, start_filters=filters)
@@ -789,7 +786,7 @@ for params in ParameterGrid(param_grid):
     plot_loss(depth, patch_size, filters)
 
     # Evaluate and save model
-    eval_save(depth, patch_size, filters, min(loss_dict['val_loss']))
+    eval_save(depth, patch_size, filters, min(loss_dict["val_loss"]))
     save(depth, patch_size, filters)
 
     # Check for best validation loss
