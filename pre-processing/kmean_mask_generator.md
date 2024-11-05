@@ -37,9 +37,9 @@ from sklearn.cluster import KMeans
 ### 1.Paths
 
 ```python
-imagesFolder = ""
-maskFolder = ""
-roiFolder = ""
+imagesFolder = "/k_mean/images"
+maskFolder = "k_mean/output"
+roiFolder = "data/ROI"
 ```
 
 ### 2. tif -> png
@@ -64,6 +64,8 @@ convertPng(imagesFolder)
 
 ### 3. Crop 120 pixels
 
++- the title and legend in the botton of the images.
+
 ```python
 def crop_images(imagesFolder):
     for filename in os.listdir(imagesFolder):
@@ -83,13 +85,20 @@ crop_images(imagesFolder)
 
 ### 4. Show k means
 
-showing color maps to better customize the kmeans algorithm
+Showing color maps to better customize the kmeans algorithm.
 
 
 ```python
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+
+
 def k_mean_mask(imagesFolder, num_clusters=3):
     for filename in os.listdir(imagesFolder):
-        if filename.endswith((".jpg", ".jpeg", ".png")):
+        if filename.endswith(".png"):
             image_path = os.path.join(imagesFolder, filename)
 
             image = cv2.imread(image_path)
@@ -99,44 +108,25 @@ def k_mean_mask(imagesFolder, num_clusters=3):
 
             blurred_image = cv2.GaussianBlur(image, (7, 7), 0)
             gray_image = cv2.cvtColor(blurred_image, cv2.COLOR_BGR2GRAY)
-
-            # Ensure correct data type
-            reshaped_image = np.ascontiguousarray(
-                gray_image.reshape((-1, 1)).astype(np.float32)
-            )
-
-            # KMeans clustering
+            reshaped_image = gray_image.reshape((-1, 1)).astype(np.float32)
             kmeans = KMeans(n_clusters=num_clusters, n_init=10)
             kmeans.fit(reshaped_image)
 
-            labels = kmeans.labels_
-            labels = labels.reshape(gray_image.shape)
-
-            # Generate colors for clusters
+            labels = kmeans.labels_.reshape(gray_image.shape)
             colors = np.random.randint(0, 255, size=(num_clusters, 3), dtype=np.uint8)
 
-            # Create a blank image for clustered result
+            # Create a blank image for the clustered result
             clustered_image = np.zeros_like(image, dtype=np.uint8)
 
-            # Assign cluster colors
             for i in range(num_clusters):
                 clustered_image[labels == i] = colors[i]
 
-            # Debugging print statements
-            print(f"clustered_image type: {type(clustered_image)}")
-            print(f"clustered_image shape: {clustered_image.shape}")
-            print(f"clustered_image dtype: {clustered_image.dtype}")
-
-            # Ensure it's a valid NumPy array before converting colors
-            if isinstance(clustered_image, np.ndarray):
-                # Convert BGR to RGB for plotting
-                plt.imshow(cv2.cvtColor(clustered_image, cv2.COLOR_BGR2RGB))
-                plt.show()
-            else:
-                print("clustered_image is not a valid NumPy array.")
+            plt.imshow(cv2.cvtColor(clustered_image, cv2.COLOR_BGR2RGB))
+            plt.title(f"Clustered Image: {filename}")
+            plt.axis("off")
+            plt.show()
 
 
-# Call the function with your images folder
 k_mean_mask(imagesFolder)
 ```
 
@@ -146,8 +136,7 @@ k_mean_mask(imagesFolder)
 num_clusters = 3
 
 
-def k_mean_mask(imagesFolder, maskFolder, num_clusters):
-
+def k_mean_mask(imagesFolder, maskFolder, num_clusters=3):
     if not os.path.exists(maskFolder):
         os.makedirs(maskFolder)
 
@@ -155,72 +144,41 @@ def k_mean_mask(imagesFolder, maskFolder, num_clusters):
         if filename.endswith(".png"):
             image_path = os.path.join(imagesFolder, filename)
 
+            # Read, blur, and convert to grayscale
             image = cv2.imread(image_path)
+            gray_image = cv2.cvtColor(
+                cv2.GaussianBlur(image, (7, 7), 0), cv2.COLOR_BGR2GRAY
+            )
+            reshaped_image = gray_image.reshape(-1, 1).astype(np.float32)
 
-            blurred_image = cv2.GaussianBlur(image, (7, 7), 0)
-            gray_image = cv2.cvtColor(blurred_image, cv2.COLOR_BGR2GRAY)
-            reshaped_image = np.ascontiguousarray(
-                gray_image.reshape((-1, 1)).astype(np.float32)
+            kmeans = KMeans(n_clusters=num_clusters, n_init=10).fit(reshaped_image)
+            labels = kmeans.labels_.reshape(gray_image.shape)
+
+            # Determine the cluster to keep - This needs to be customied based on the type of coating - as well as num_clusters
+
+            centroids = kmeans.cluster_centers_.flatten()
+            sorted_indices = np.argsort(centroids)
+            middle_index = sorted_indices[num_clusters // 2]
+
+            # Create a mask for the middle cluster - where the coating is
+            mask = np.where(labels == middle_index, 255, 0).astype(np.uint8)
+
+            # Check if any region touches both sides - to keep just teh biggest one without any small part
+            num_labels, label_img, stats, _ = cv2.connectedComponentsWithStats(
+                mask, connectivity=8
+            )
+            touching_both_sides = any(
+                np.any(label_img[:, 0] == i) and np.any(label_img[:, -1] == i)
+                for i in range(1, num_labels)
             )
 
-            kmeans = KMeans(n_clusters=num_clusters, n_init=10)
-            kmeans.fit(reshaped_image)
-
-            labels = kmeans.labels_
-            unique_labels, label_counts = np.unique(labels, return_counts=True)
-
-            # to determine which label belong to coating
-            centroids = kmeans.cluster_centers_
-            distances_to_upper_boundary = [centroid[0] for centroid in centroids]
-            closest_to_upper_boundary = np.argmin(distances_to_upper_boundary)
-
-            label_counts_sorted_indices = np.argsort(label_counts)
-            largest_cluster_label = unique_labels[label_counts_sorted_indices[-1]]
-
-            # Remove the closest to upper boundary, the biggest, and the second closest to upper boundary
-            remaining_labels = [
-                label
-                for label in unique_labels
-                if label not in [closest_to_upper_boundary, largest_cluster_label]
-            ]
-
-            # Color the remaining two clusters to white
-            cluster_colors = {label: [255, 255, 255] for label in remaining_labels}
-
-            segmented_img = np.zeros_like(image)
-
-            for i in range(image.shape[0]):
-                for j in range(image.shape[1]):
-                    label = labels[i * image.shape[1] + j]
-                    if label in cluster_colors:
-                        segmented_img[i, j] = cluster_colors[label]
-
-            #  polishing directly on the segmented image
-            mask = cv2.cvtColor(segmented_img, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-                thresh, connectivity=8
-            )
-            touching_both_sides = False
-            for i in range(1, num_labels):
-                left_side = labels[:, 0] == i
-                right_side = labels[:, -1] == i
-                if np.any(left_side) and np.any(right_side):
-                    touching_both_sides = True
-                    break
             if touching_both_sides:
                 largest_component_index = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1
-                largest_component_mask = (
-                    np.uint8(labels == largest_component_index) * 255
+                mask = np.where(label_img == largest_component_index, 255, 0).astype(
+                    np.uint8
                 )
-                filtered_mask = cv2.bitwise_and(thresh, largest_component_mask)
-            else:
-                filtered_mask = mask
-            filtered_mask = cv2.cvtColor(filtered_mask, cv2.IMREAD_GRAYSCALE)
-            # Convert the filtered mask to binary
-            _, binary_mask = cv2.threshold(filtered_mask, 127, 255, cv2.THRESH_BINARY)
-            binary_mask_path = os.path.join(maskFolder, f"{filename}")
-            cv2.imwrite(binary_mask_path, binary_mask)
+
+            cv2.imwrite(os.path.join(maskFolder, filename), mask)
 
 
 k_mean_mask(imagesFolder, maskFolder, num_clusters)
@@ -235,7 +193,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 imagesFolder = "/home/emma/Documents/DATA/kmean/train/train_x"
-maskFolder = "/home/emma/Documents/DATA/kmean/train/train_y"  # Removed extra space
+maskFolder = "/home/emma/Documents/DATA/kmean/train/train_y"
 
 
 def show(image_folder, mask_folder):
@@ -255,7 +213,6 @@ def show(image_folder, mask_folder):
                 print(f"Error loading mask: {mask_path}")
                 continue
 
-            # Convert the binary mask to 3 channels
             binary_mask = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
 
             # Apply red color to the binary mask

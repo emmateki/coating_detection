@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from read_roi import read_roi_file
 
-"This is a script to convert ROI files which ends with _measurements to a CSV file."
+"Convert ROI files which ends with _measurements to a CSV file. Needed for evaluation."
 
 
 roi_folder = f""

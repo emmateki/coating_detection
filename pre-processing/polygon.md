@@ -43,9 +43,7 @@ This is just for showing - can be commented
 
 ```python
 def showMeasurements(roiFolder, imageFolder, numStartRoi, numEndRoi):
-    # Iterate over all subdirectories in the roiFolder
     for foldername in os.listdir(roiFolder):
-        # Check if the folder ends with '_measurement'
         if foldername.endswith("_measurements"):
             measurement_folder_path = os.path.join(roiFolder, foldername)
 
@@ -57,11 +55,9 @@ def showMeasurements(roiFolder, imageFolder, numStartRoi, numEndRoi):
                 print(f"Image {image_name} not found in {imageFolder}.")
                 continue
 
-            # Load the image
             img = plt.imread(image_path)
             plt.imshow(img)
 
-            # Get ROI files in the current measurement folder
             roi_files = [
                 f for f in os.listdir(measurement_folder_path) if f.endswith(".roi")
             ]
@@ -142,9 +138,7 @@ def createLine(x1Values, y1Values, x2Values, y2Values):
 
     # Create linear interpolation for lower line
     for i in range(len(x2Values) - 1):
-        xSegment = np.linspace(
-            x2Values[i], x2Values[i + 1], num=100
-        )  # 100 points for linear interpolation
+        xSegment = np.linspace(x2Values[i], x2Values[i + 1], num=100)
         ySegment = np.linspace(y2Values[i], y2Values[i + 1], num=100)
         xLine.extend(xSegment)
         y2Line.extend(ySegment)

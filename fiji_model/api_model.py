@@ -11,8 +11,6 @@ import imageio
 import unet
 import glob
 import matplotlib.pyplot as plt
-from skimage import measure
-from skimage.measure import label, regionprops
 
 import segmentation_models_pytorch
 from segmentation_models_pytorch import Unet
@@ -193,8 +191,9 @@ def predict(img, model, device, pad_stride=32):
     padded_tensor, pads = pad_to(tensor, pad_stride)
     res_tensor = model(padded_tensor)
     res_unp = unpad(res_tensor, pads)
-    # Convert to binary mask with this threshold
-    res_unp_binary = (res_unp > 0.8).float()
+    # activation function
+    res_unp = torch.sigmoid(res_unp)
+    res_unp_binary = (res_unp > 0.5).float()
     return res_unp_binary.squeeze(0).squeeze(0)
 
 
@@ -213,7 +212,7 @@ def pad_to(x, stride):
     lw, uw = int((new_w - w) // 2), int((new_w - w) - (new_w - w) // 2)
     pads = (lw, uw, lh, uh)
 
-    out = F.pad(x, pads, "constant", 0)
+    out = F.pad(x, pads, "replicate", 0)
 
     return out, pads
 
@@ -224,72 +223,6 @@ def unpad(x, pad):
     if pad[0] + pad[1] > 0:
         x = x[:, :, :, pad[0] : -pad[1]]
     return x
-
-
-def get_clusters(binary_mask):
-    """
-    Label the clusters in the binary mask and return labeled mask and number of clusters.
-
-    Args:
-        binary_mask (numpy.ndarray): Binary mask to be labeled.
-
-    Returns:
-        tuple: Labeled mask and the number of clusters.
-    """
-    labeled_mask = label(binary_mask, connectivity=2)
-    num_clusters = labeled_mask.max()
-    return labeled_mask, num_clusters
-
-
-def find_cluster_touches_sides(labeled_mask):
-    """
-    Find if any cluster touches both left and right sides of the mask.
-
-    Args:
-        labeled_mask (numpy.ndarray): Mask with labeled clusters.
-
-    Returns:
-        numpy.ndarray or None: The cluster touching both sides, or None if no such cluster exists.
-    """
-    regions = regionprops(labeled_mask)
-    for region in regions:
-        min_col, min_row, max_col, max_row = region.bbox
-        if min_col == 0 and max_col == labeled_mask.shape[1]:
-            return labeled_mask == region.label
-    return None
-
-
-def find_largest_clusters(labeled_mask, side):
-    """
-    Find the largest clusters that touch a specific side ('left' or 'right').
-
-    Args:
-        labeled_mask (numpy.ndarray): Mask with labeled clusters.
-        side (str): The side to check ('left' or 'right').
-
-    Returns:
-        numpy.ndarray or None: The largest cluster touching the specified side, or None if no such cluster exists.
-    """
-    regions = regionprops(labeled_mask)
-    if side == "left":
-        side_col = 0
-    elif side == "right":
-        side_col = labeled_mask.shape[1] - 1
-    else:
-        raise ValueError("Side must be either 'left' or 'right'")
-
-    side_clusters = [
-        region
-        for region in regions
-        if region.bbox[1] <= side_col <= region.bbox[3]
-        or region.bbox[1] <= side_col <= region.bbox[3]
-    ]
-
-    if side_clusters:
-        largest_cluster = max(side_clusters, key=lambda r: r.area)
-        return labeled_mask == largest_cluster.label
-
-    return None
 
 
 def generate_mask(
@@ -311,7 +244,8 @@ def generate_mask(
         depth (int): Depth of the U-Net model.
         in_channels (int): Number of input channels for the U-Net model.
         start_filters (int): Number of starting filters for the U-Net model.
-        crop_down_percentage (int): Percentage of height that consists of the title and details of the image.
+        crop_down_percentage (float): Percentage of height that consists of the title and details of the image.
+        Was calculated by the ratio of the title height to the total height of the image.
 
     Returns:
         numpy.ndarray: Binary mask.
@@ -319,10 +253,11 @@ def generate_mask(
     image = cv2.imread(input_image_path)
     height, width = image.shape[:2]
 
-    image = image[: round(-crop_down_percentage * width), :]
-
+    # Crop out unwanted parts from the image based on the given percentage
+    image = image[: round(-crop_down_percentage * height), :]
     test_img = read_image(image)
 
+    # Prepare the U-Net model
     decoder_channels = [start_filters * 2**i for i in range(depth, 0, -1)]
     model = Unet(
         encoder_depth=depth,
@@ -331,41 +266,19 @@ def generate_mask(
         decoder_channels=decoder_channels,
     )
 
+    # Load the model weights
     script_dir = os.path.dirname(os.path.abspath(__file__))
     pth_files = glob.glob(os.path.join(script_dir, "*.pth"))
     model_path = pth_files[0]
-
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
     model.eval()
 
+    # Generate prediction
     with torch.no_grad():
         output = predict(test_img, model, "cpu")
 
-    # Remove batch dimension and convert to numpy array
+    # Convert to binary mask
     binary_mask = output.squeeze().numpy()
-
-    cv2.imwrite("binary_mask.png", (binary_mask * 255).astype(np.uint8))
-
-    labeled_mask, num_clusters = get_clusters(binary_mask)
-
-    imageio.imwrite("binary_mask.png", (binary_mask * 255).astype(np.uint8))
-
-    final_mask = find_cluster_touches_sides(labeled_mask)
-    if final_mask is not None:
-        return final_mask
-
-    left_mask = find_largest_clusters(labeled_mask, "left")
-    right_mask = find_largest_clusters(labeled_mask, "right")
-
-    if left_mask is not None:
-        final_mask = np.logical_or(final_mask, left_mask)
-
-    if right_mask is not None:
-        final_mask = np.logical_or(final_mask, right_mask)
-
-    if final_mask is None:
-        largest_cluster = max(regionprops(labeled_mask), key=lambda r: r.area)
-        final_mask = labeled_mask == largest_cluster.label
 
     return binary_mask
 

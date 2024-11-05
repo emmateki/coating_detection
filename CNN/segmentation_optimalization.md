@@ -7,7 +7,7 @@ jupyter:
       format_version: '1.3'
       jupytext_version: 1.16.4
   kernelspec:
-    display_name: Python 3 (ipykernel)
+    display_name: Corrosion
     language: python
     name: python3
 ---
@@ -17,49 +17,73 @@ jupyter:
 %autoreload 2
 ```
 
+# Setup and Configuration
+
+all paths are defined in config.json file 
+
 ```python editable=true slideshow={"slide_type": ""}
-import pathlib
-import imageio
-import matplotlib.pyplot as plt
-import torch
+import os
+import csv
+import copy
+import logging
+from pathlib import Path
+
 import numpy as np
+import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import torch.nn as nn
-import csv
-import os
-from segmentation_models_pytorch import Unet
+import scipy.ndimage as ndi
+import imageio
+import matplotlib.pyplot as plt
+from tqdm.auto import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 import optuna
-import albumentations as A
-import scipy.ndimage as ndi
-from tqdm.auto import tqdm
-import logging
+import json
+
 from torch.functional import F
 
-#imports from files
-from plots_CNN import plot_histogram
-from plots_CNN import plot_predictions
-from plots_CNN import plot_loss
+# Segmentation model
+from segmentation_models_pytorch import Unet
+
+# Custom modules and functions
+from plots_CNN import plot_predictions, plot_loss, plot_histogram
 from loss_functions import IoULoss
 from evaluation import eval_save
+from augumentation import setup_augmentation
+
+# Device configuration
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ```
 
-# Setup and Configuration
-
 ```python
-idx = 1
+with open("config.json", "r") as f:
+    config = json.load(f)
 
-file_path_JSON = f"evaluation_EXP{idx}.json"
-model_path = f"models_EXP{idx}"
-pics_path = f"predictions_EXP{idx}"
-loss_path = f"loss_plots_EXP{idx}"
-histogram_path = f"histogram_plots_EXP{idx}"
-```
+idx = str(config["paths"]["idx"])
 
-```python
-batch_size = 32
+
+def update_paths(paths, idx):
+    for key, path in paths.items():
+        if isinstance(path, str):
+            paths[key] = path.replace("{idx}", idx)
+    return paths
+
+
+updated_paths = update_paths(config["paths"], idx)
+
+eval_results_path = Path(config["paths"]["eval_results_path"])
+model_path = Path(config["paths"]["model_path"])
+predictions_path = Path(config["paths"]["predictions_path"])
+loss_path = Path(config["paths"]["loss_path"])
+histogram_path = Path(config["paths"]["histogram_path"])
+
+batch_size = config["model"]["batch_size"]
+epochs = config["model"]["epochs"]
+
+data_root = Path(config["paths"]["data_root"])
+csv_roi_path = Path(config["paths"]["csv_roi_path"])
+print(model_path)
 ```
 
 <!-- #region editable=true slideshow={"slide_type": ""} -->
@@ -68,12 +92,6 @@ batch_size = 32
 <!-- #endregion -->
 
 ```python editable=true slideshow={"slide_type": ""}
-data_root = pathlib.Path("/home/...")
-csv_roi_path = data_root / "roi.csv"
-```
-
-```python editable=true slideshow={"slide_type": ""}
-
 def roiread(image_test_names):
     """
     Reads ROI (Region of Interest) measurements from a CSV file and filters them based on given image test names and then save data into array.
@@ -106,7 +124,9 @@ def roiread(image_test_names):
     # Create a dictionary to map train_name (as integer) to its index in names_set
     name_to_index = {name: index for index, name in enumerate(names_set)}
     # Sort data_list based on the order in image_test_names (or names_set)
-    data_list_sorted = sorted(data_list, key=lambda x: name_to_index.get(int(x["train_name"]), float("inf")))
+    data_list_sorted = sorted(
+        data_list, key=lambda x: name_to_index.get(int(x["train_name"]), float("inf"))
+    )
     the_good_rows = (r for r in data_list_sorted if int(r["train_name"]) in names_set)
 
     for row in the_good_rows:
@@ -137,7 +157,7 @@ def imread(p):
 
 def imread_mask(p):
     img = imread(p)
-    just_mask = np.float32(img > 0)  # ensure only two values 1.0 and 0.0
+    just_mask = np.float32(img > 0)
     return just_mask
 
 
@@ -154,8 +174,6 @@ def read_set(root, set_name):
 
     # ensure the same order
     y_paths = [y_root / p.name for p in x_paths]
-
-    # casting to npfloat
     x_iter = map(imread, x_paths)
 
     y = tqdm(map(imread_mask, y_paths), total=len(x_paths), desc=f"Reading {set_name}")
@@ -191,143 +209,102 @@ print(f"Success {len(train_imgs)=} {len(test_imgs)=}")
 <!-- #region editable=true slideshow={"slide_type": ""} -->
 # Augumentation
 
-Uses albumentation.
-
 <!-- #endregion -->
-
-```python editable=true slideshow={"slide_type": ""}
-def setup_augmentation(
-    patch_size,
-    crop=False,
-    elastic=False,
-    brightness_contrast=False,
-    flip_vertical=False,
-    flip_horizontal=False,
-    blur_sharp=False,
-    gauss_noise=False,
-    rotate_deg=None,
-    interpolation=2,
-    invert_color=False
-):
-    transform_list = []
-    if crop:
-        # 70% chance for non-empty mask crop, 30% for random crop
-        transform_list.append(
-           
-                A.CropNonEmptyMaskIfExists(
-                    height=patch_size,
-                    width=patch_size,
-                    ignore_values=None,
-                    ignore_channels=None,
-                    p=1
-                )
-        )
-    if elastic:
-        transform_list.append(
-            A.ElasticTransform(
-                p=0.5,
-                alpha=10,
-                sigma=120 * 0.1,
-                alpha_affine=120 * 0.1,
-                interpolation=interpolation,
-            )
-        )
-
-    if brightness_contrast:
-        transform_list.append(
-            A.RandomBrightnessContrast(
-                brightness_limit=(-0.2, 0.2),
-                contrast_limit=(-0.2, 0.2),
-                p=0.3
-            )
-        )
-
-    if gauss_noise:
-        transform_list.append(
-            A.GaussNoise(var_limit=(0.001), p=0.3)
-        )
-
-    if blur_sharp:
-        transform_list.append(
-
-                    A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=0.3)
-
-            )
-        
-    if flip_horizontal:
-        transform_list.append(A.HorizontalFlip(p=0.3))
-
-    return A.Compose(transform_list)
-
-```
 
 ```python editable=true slideshow={"slide_type": ""}
 def define_transform_fn(patch_size):
     transform_fn = setup_augmentation(
         patch_size,
-        crop = True,
-        elastic = True,
-        brightness_contrast = True,
-        flip_horizontal = True,
-        gauss_noise = True,
-        blur_sharp = True
+        crop=True,
+        elastic=True,
+        brightness_contrast=True,
+        flip_horizontal=True,
+        gauss_noise=True,
+        blur_sharp=True,
     )
 
-    transform_fn_crop = setup_augmentation(
-        patch_size,
-        crop = True
-    )
+    transform_fn_crop = setup_augmentation(patch_size, crop=True)
 
-    return transform_fn,transform_fn_crop
+    return transform_fn, transform_fn_crop
+```
+
+## Dataset and loader
+
+```python
+# Code inspired by Jaroslav Knotek
+class Dataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        images,
+        labels,
+        transform,
+    ):
+        assert len(images) == len(labels), f"{len(images)=}!={len(labels)=}"
+        self.images = images
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        label = self.labels[idx]
+        if self.transform is not None:
+            transformed = self.transform(image=image, mask=label)
+            tr_x = transformed["image"]
+            tr_y = transformed["mask"]
+        else:
+            tr_x = image
+            tr_y = label
+
+        return {
+            "x": tr_x[None],
+            "y": tr_y[None],
+        }
 ```
 
 ```python
-import numpy as np
-import torch
-
-def loader(patch_size, experiment, random_seed=42):
+def loader(patch_size, random_seed=42):
     np.random.seed(random_seed)
-    
+
     num_samples = len(train_imgs)
+
     # Randomly select 32 unique indices from the training dataset
     random_indices = np.random.choice(num_samples, size=32, replace=False)
 
     val_imgs = [train_imgs[i] for i in random_indices]
     val_masks = [train_masks[i] for i in random_indices]
-    
+
     # Exclude validation indices from training dataset
     train_indices = [i for i in range(num_samples) if i not in random_indices]
     train_imgs_filtered = [train_imgs[i] for i in train_indices]
     train_masks_filtered = [train_masks[i] for i in train_indices]
-    
-    transform_fn,transform_fn_crop = define_transform_fn(patch_size=patch_size)
-    
+
+    transform_fn, transform_fn_crop = define_transform_fn(patch_size=patch_size)
+
     train_dataset = Dataset(train_imgs_filtered, train_masks_filtered, transform_fn)
-    training_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True, drop_last=True)
+    training_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=32, shuffle=True, drop_last=True
+    )
 
     val_dataset = Dataset(val_imgs, val_masks, transform_fn_crop)
-    validation_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32, shuffle=False)
-    
-    print("Number of train imgs: " + str(len(train_imgs_filtered)))
-    print("Number of val imgs: " + str(len(val_imgs)))
+    validation_loader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=32, shuffle=False
+    )
 
-    
+    # print("Number of train imgs: " + str(len(train_imgs_filtered)))
+    # print("Number of val imgs: " + str(len(val_imgs)))
+
     return training_loader, validation_loader
-
 ```
 
 # Define training
 
-- epochs
-  - training
-    - steps
-  - validation
-    - steps
 
 
 ```python
-import logging
-
+# Code inspired by Jaroslav Knotek
 logging.basicConfig()
 logger = logging.getLogger("training")
 logger.setLevel(logging.DEBUG)
@@ -343,13 +320,11 @@ def train(
     device="cpu",
     scheduler=None,
     trial=None,
-    early_stopping_patience=20,
 ):
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     best_model_state = None
-    epochs_without_improvement = 0 
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
 
     if scheduler:
         scheduler.optimizer = optimizer
@@ -372,17 +347,10 @@ def train(
         validation_losses.append(loss_val)
         if loss_val < best_val_loss:
             best_val_loss = loss_val
-            best_model_state = copy.deepcopy(model.state_dict()) 
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 0  # Increment the counter if no improvement
+            best_model_state = copy.deepcopy(model.state_dict())
 
         trial.report(loss_val, step=epoch)
-        #if trial.should_prune():
-           # raise optuna.TrialPruned()
-        if epochs_without_improvement >= early_stopping_patience:
-            logger.info(f"Early stopping at epoch {epoch} due to no improvement in validation loss for {early_stopping_patience} consecutive epochs.")
-            break
+
         logger.info(f"{epoch=} {loss_val=:.5f}")
 
     return {"train_loss": train_losses, "val_loss": validation_losses}, best_model_state
@@ -425,6 +393,7 @@ def step(model, targets, loss_fn, device="cpu"):
 # Padding
 
 ```python
+# Code inspired by Jaroslav Knotek
 def pad_to(x, stride):
     h, w = x.shape[-2:]
 
@@ -456,16 +425,16 @@ def unpad(x, pad):
 ### Prediction
 
 ```python editable=true slideshow={"slide_type": ""}
-def predict(img, model, device, probability_threshold,pad_stride=32):
+def predict(img, model, device, probability_threshold, pad_stride=32):
     img_3d = np.stack([img] * 1)
     tensor = torch.from_numpy(img_3d).to(device)[None]
     padded_tensor, pads = pad_to(tensor, pad_stride)
     res_tensor = model(padded_tensor)
     res_unp = unpad(res_tensor, pads)
-    # convert to binary mask with this threshold
+    # activation function
+    res_unp = torch.sigmoid(res_unp)
     res_unp_binary = (res_unp > probability_threshold).float()
     return res_unp_binary.squeeze(0).squeeze(0)
-
 ```
 
 ## Training and optimalization with OPTUNA
@@ -473,16 +442,63 @@ def predict(img, model, device, probability_threshold,pad_stride=32):
 ```python
 def get_scheduler(optimizer, scheduler_type, params):
     if scheduler_type == "linear":
-        return lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=params["end_factor"], total_iters=150)
+        return lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=1.0,
+            end_factor=params["end_factor"],
+            total_iters=epochs,
+        )
     elif scheduler_type == "warmup_cosine":
-        return lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=params["T_0"], T_mult=params["T_mult"])
-
+        return lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=params["T_0"], T_mult=params["T_mult"]
+        )
 ```
 
 ```python
-# Loss function
+def configure_scheduler(trial):
+    scheduler_type = trial.suggest_categorical(
+        "scheduler_type", [None, "warmup_cosine"]
+    )
+    scheduler_params = {}
+
+    if scheduler_type == "linear":
+        scheduler_params["end_factor"] = trial.suggest_categorical(
+            "end_factor", [1e-2, 1e-3]
+        )
+        scheduler_params["T_0"] = 0
+    elif scheduler_type == "warmup_cosine":
+        scheduler_params["end_factor"] = 0
+        scheduler_params["T_mult"] = 1
+        scheduler_params["T_0"] = 25
+    else:
+        scheduler_params["end_factor"] = 0
+        scheduler_params["T_0"] = 0
+
+    return scheduler_type, scheduler_params
+```
+
+```python
+def configure_model(depth, filters):
+    decoder_channels = [filters * 2**i for i in range(depth, 0, -1)]
+
+    model = Unet(
+        encoder_depth=depth,
+        encoder_weights="imagenet",
+        in_channels=1,
+        decoder_channels=decoder_channels,
+    ).to(device)
+    return model
+```
+
+```python
+def save_model(model, depth, patch_size, filters, trial_number):
+    os.makedirs(model_path, exist_ok=True)
+    model_save_path = f"{model_path}/best_model_{depth}_{patch_size}_{filters}_trial_{trial_number}.pth"
+    torch.save(model.state_dict(), model_save_path)
+```
+
+```python
 loss_fn = IoULoss()
-import copy
 
 
 def loss_wrapper(pred, target_dict):
@@ -490,96 +506,108 @@ def loss_wrapper(pred, target_dict):
 
 
 def objective(trial):
-    # Hyperparameter suggestions
+    # define hyperparameters
     depth = 4
     patch_size = 256
     filters = 16
+
     lr = trial.suggest_categorical("lr", [1e-2, 1e-3])
+
+    # probability threshold for the binary mask
     probability_threshold = 0.5
-    experiment = 7
 
-    # Scheduler suggestions
-    scheduler_type = trial.suggest_categorical("scheduler_type", [ None, "warmup_cosine"])
+    scheduler_type, scheduler_params = configure_scheduler(trial)
 
-    scheduler_params = {}
-    
-    if scheduler_type == "linear":
-        scheduler_params["end_factor"] = trial.suggest_categorical("end_factor", [1e-2, 1e-3])
-        scheduler_params["T_0"] = 0  # Not used for linear scheduler
-    elif scheduler_type == "warmup_cosine":
-        scheduler_params["end_factor"] = 0  # Not used for warmup_cosine scheduler
-        scheduler_params["T_mult"] = 1
-        scheduler_params["T_0"] = 25
-    else:
-        scheduler_params["end_factor"] = 0
-        scheduler_params["T_0"] = 0
+    training_loader, validation_loader = loader(patch_size)
 
-    # Load data
-    training_loader, validation_loader = loader(patch_size, experiment)
-    
-    # Create model
-    decoder_channels = [filters * 2**i for i in range(depth, 0, -1)]
-    model = Unet(encoder_depth=depth, encoder_weights="imagenet",
-                 in_channels=1, decoder_channels=decoder_channels).to(device)
-    
+    model = configure_model(depth, filters)
+
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = get_scheduler(optimizer, scheduler_type, scheduler_params)
 
-
-    best_val_loss = float('inf')
+    # Train the model
+    best_val_loss = float("inf")
     with logging_redirect_tqdm():
         loss_dict, best_model_state = train(
             model,
             training_loader,
             validation_loader,
             loss_wrapper,
-            epochs=150,
+            epochs=epochs,
             device=device,
             scheduler=scheduler,
-            trial=trial
+            trial=trial,
         )
-    
+
     best_val_loss = min(loss_dict["val_loss"])
     model.load_state_dict(best_model_state)
 
-    # Save model only if it achieves new best validation loss
-    os.makedirs(model_path, exist_ok=True)
-    model_save_path = f"{model_path}/best_model_{depth}_{patch_size}_{filters}_trial_{trial.number}.pth"
-    torch.save(model.state_dict(), model_save_path)
+    save_model(model, depth, patch_size, filters, trial.number)
 
-    # Evaluate on test images
+    # Evaluate on test images - first make predictions
     with torch.no_grad():
-        preds = [predict(img, model, device, probability_threshold) for img in test_imgs]
-    
-    # Call eval_save to compute IoU, border distance, and other metrics
-    mean_iou, min_iou, mean_border_distance_total, min_border_distance_total = eval_save(
-        depth, patch_size, filters, lr, scheduler_type, scheduler_params["end_factor"], 
-        scheduler_params["T_0"], best_val_loss, preds, trial.number, probability_threshold, histogram_path,
-        test_masks, device, test_roi,file_path_JSON
+        preds = [
+            predict(img, model, device, probability_threshold) for img in test_imgs
+        ]
+
+    iou_values = eval_save(
+        depth,
+        patch_size,
+        filters,
+        lr,
+        scheduler_type,
+        scheduler_params["end_factor"],
+        scheduler_params["T_0"],
+        best_val_loss,
+        preds,
+        trial.number,
+        probability_threshold,
+        histogram_path,
+        test_masks,
+        device,
+        test_roi,
+        eval_results_path,
     )
 
-    # Save predictions and plot the losses
-    plot_predictions(depth, patch_size, filters, preds, trial.number, pics_path, test_imgs, test_masks, image_test_names)
+    plot_predictions(
+        depth,
+        patch_size,
+        filters,
+        preds,
+        trial.number,
+        predictions_path,
+        test_imgs,
+        test_masks,
+        image_test_names,
+    )
+
     plot_loss(depth, patch_size, filters, trial.number, loss_dict, loss_path)
+    plot_histogram(iou_values, depth, patch_size, filters, trial.number, histogram_path)
 
     return best_val_loss
+```
 
-
+```python
 if __name__ == "__main__":
+    # Grid search
     search_space = {
-        'lr': [1e-2, 1e-3],
-        'scheduler_type': [ None, "warmup_cosine"],
-        'end_factor': [None],
+        "lr": [1e-2, 1e-3],
+        "scheduler_type": [None, "warmup_cosine"],
+        "end_factor": [None],
     }
 
     study = optuna.create_study(
-        storage="sqlite:///hopefully_final.sqlite3",
+        storage="sqlite:///db.sqlite3",
         sampler=optuna.samplers.GridSampler(search_space),
-        study_name="optimalization-WC-None",
-        direction="minimize"
+        study_name="optimization-WC-None",
+        direction="minimize",
     )
-    
+
     study.optimize(objective, n_trials=10)
 
     logger.info(f"Best value: {study.best_value} (params: {study.best_params})")
+```
+
+```python
+exit()
 ```
