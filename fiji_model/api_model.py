@@ -8,7 +8,6 @@ import cv2
 import torch
 from torch.functional import F
 import imageio
-import unet
 import glob
 import matplotlib.pyplot as plt
 
@@ -64,8 +63,6 @@ def create_line_roi(
     image_filename,
     mask,
     num_rois,
-    y1_default=250,
-    y2_default=200,
     float_stroke_width=5.0,
     start_of_line=0.5,
 ):
@@ -97,11 +94,13 @@ def create_line_roi(
     space_between_lines = maskWidth / num_rois
     # Array for saving the ROI file paths
     roi_files = []
+    y2_mean = []
 
     # Generate and save individual line ROIs
     for i in range(num_rois):
         x1 = round(space_between_lines / 2 + (i * space_between_lines))
         y1, y2 = find_mask_in_col(x1, maskHeight, mask)
+        y2_mean.append(y2)
         # Create a line ROI object
         roi = roifile.ImagejRoi(
             roitype=roifile.ROI_TYPE.LINE,
@@ -118,8 +117,9 @@ def create_line_roi(
         # Store the ROI file path for later removal
         roi_files.append(roi_path)
 
-    y1 = y1_default
-    y2 = y2_default
+    # dynamically set y1 and y2 for the second set
+    y2 = np.mean(y2_mean) + 50
+    y1 = y2 + 50
     x = 0
 
     for i in range(num_rois, num_rois * 2):  # Generate 10 lines per row
@@ -227,7 +227,7 @@ def unpad(x, pad):
 
 def generate_mask(
     input_image_path,
-    depth=4,
+    depth=5,
     in_channels=1,
     start_filters=16,
     crop_down_percentage=0.117,
