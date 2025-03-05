@@ -7,7 +7,7 @@ jupyter:
       format_version: '1.3'
       jupytext_version: 1.16.4
   kernelspec:
-    display_name: Python 3
+    display_name: Corrosion
     language: python
     name: python3
 ---
@@ -26,6 +26,7 @@ import os
 import numpy as np
 import cv2
 from read_roi import read_roi_file
+from PIL import Image
 ```
 
 ```python
@@ -35,6 +36,45 @@ imagesFolder = ""
 
 numStartRoi = 0
 numEndRoi = 10
+```
+
+### 0.Tif->PNG and unzip
+
+```python
+"""
+import zipfile
+
+
+def convertPng(tif_folder):
+    tif_files = [f for f in os.listdir(tif_folder) if f.endswith(".tif")]
+    for tifFile in tif_files:
+        tifPath = os.path.join(tif_folder, tifFile)
+
+        pngFileName = os.path.splitext(tifFile)[0] + ".png"
+        pngPath = os.path.join(tif_folder, pngFileName)
+
+        img = Image.open(tifPath)
+        img.save(pngPath, "PNG")
+
+        os.remove(tifPath)
+
+
+convertPng(imagesFolder)
+
+
+def unzip(roiFolder):
+    roi_files = [f for f in os.listdir(roiFolder) if f.endswith(".zip")]
+    for roiFile in roi_files:
+        roiPath = os.path.join(roiFolder, roiFile)
+        extractFolder = os.path.join(roiFolder, os.path.splitext(roiFile)[0])
+        os.makedirs(extractFolder, exist_ok=True)
+        with zipfile.ZipFile(roiPath, "r") as zip_ref:
+            zip_ref.extractall(extractFolder)
+        os.remove(roiPath)
+
+
+unzip(roiFolder)
+"""
 ```
 
 ### 1.Show the ROI lines from ROI folder
