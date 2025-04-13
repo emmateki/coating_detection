@@ -7,7 +7,7 @@ jupyter:
       format_version: '1.3'
       jupytext_version: 1.16.4
   kernelspec:
-    display_name: Corrosion
+    display_name: Python 3 (ipykernel)
     language: python
     name: python3
 ---
@@ -26,6 +26,7 @@ import os
 import csv
 import copy
 import logging
+import random
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,7 @@ from tqdm.auto import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 import optuna
 import json
+import itertools
 
 from torch.functional import F
 
@@ -57,6 +59,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 ```
 
 ```python
+# IMPORTNAT NOTE: config.json must be in the same directory as this script
+
 with open("config.json", "r") as f:
     config = json.load(f)
 
@@ -79,11 +83,30 @@ loss_path = Path(config["paths"]["loss_path"])
 histogram_path = Path(config["paths"]["histogram_path"])
 
 batch_size = config["model"]["batch_size"]
-epochs = config["model"]["epochs"]
+# epochs = config["model"]["epochs"]
+epochs = 200
 
 data_root = Path(config["paths"]["data_root"])
 csv_roi_path = Path(config["paths"]["csv_roi_path"])
-print(model_path)
+```
+
+```python
+seed = 678
+
+
+def set_seed(seed=678):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+
+set_seed(678)
 ```
 
 <!-- #region editable=true slideshow={"slide_type": ""} -->
@@ -92,7 +115,7 @@ print(model_path)
 <!-- #endregion -->
 
 ```python editable=true slideshow={"slide_type": ""}
-def roiread(image_test_names):
+def roi_read(image_test_names):
     """
     Reads ROI (Region of Interest) measurements from a CSV file and filters them based on given image test names and then save data into array.
 
@@ -125,9 +148,11 @@ def roiread(image_test_names):
     name_to_index = {name: index for index, name in enumerate(names_set)}
     # Sort data_list based on the order in image_test_names (or names_set)
     data_list_sorted = sorted(
-        data_list, key=lambda x: name_to_index.get(int(x["train_name"]), float("inf"))
+        data_list, key=lambda x: name_to_index.get(
+            int(x["train_name"]), float("inf"))
     )
-    the_good_rows = (r for r in data_list_sorted if int(r["train_name"]) in names_set)
+    the_good_rows = (r for r in data_list_sorted if int(
+        r["train_name"]) in names_set)
 
     for row in the_good_rows:
         original_name = row["original_name"]
@@ -139,7 +164,8 @@ def roiread(image_test_names):
         y2 = int(row["y2"]) if row["y2"].strip().lower() != "nan" else np.nan
         length = row["length"]
 
-        roi_arr.append([original_name, train_name, roi_file, x1, x2, y1, y2, length])
+        roi_arr.append([original_name, train_name,
+                       roi_file, x1, x2, y1, y2, length])
     return roi_arr
 
 
@@ -176,7 +202,8 @@ def read_set(root, set_name):
     y_paths = [y_root / p.name for p in x_paths]
     x_iter = map(imread, x_paths)
 
-    y = tqdm(map(imread_mask, y_paths), total=len(x_paths), desc=f"Reading {set_name}")
+    y = tqdm(map(imread_mask, y_paths), total=len(
+        x_paths), desc=f"Reading {set_name}")
 
     # HACK : resizing y to have same dimensions as x
     y_resized = []
@@ -196,7 +223,7 @@ def read_set(root, set_name):
 test_imgs, test_masks, image_test_names = read_set(data_root, "test")
 train_imgs, train_masks, image_train_names = read_set(data_root, "train")
 
-test_roi = roiread(image_test_names)
+test_roi = roi_read(image_test_names)
 
 assert len(train_imgs) == len(train_masks)
 assert len(train_imgs) != 0
@@ -265,13 +292,13 @@ class Dataset(torch.utils.data.Dataset):
 ```
 
 ```python
-def loader(patch_size, random_seed=42):
-    np.random.seed(random_seed)
+def loader(patch_size):
 
     num_samples = len(train_imgs)
 
-    # Randomly select 32 unique indices from the training dataset
-    random_indices = np.random.choice(num_samples, size=32, replace=False)
+    # Randomly select unique indices from the training dataset
+    random_indices = np.random.choice(
+        num_samples, int(num_samples*0.25), replace=False)
 
     val_imgs = [train_imgs[i] for i in random_indices]
     val_masks = [train_masks[i] for i in random_indices]
@@ -281,13 +308,14 @@ def loader(patch_size, random_seed=42):
     train_imgs_filtered = [train_imgs[i] for i in train_indices]
     train_masks_filtered = [train_masks[i] for i in train_indices]
 
-    transform_fn, transform_fn_crop = define_transform_fn(patch_size=patch_size)
+    transform_fn, transform_fn_crop = define_transform_fn(
+        patch_size=patch_size)
 
-    train_dataset = Dataset(train_imgs_filtered, train_masks_filtered, transform_fn)
+    train_dataset = Dataset(train_imgs_filtered,
+                            train_masks_filtered, transform_fn)
     training_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=32, shuffle=True, drop_last=True
-    )
-
+        train_dataset, batch_size=32, shuffle=True, drop_last=True)
+    # no augumentation on valdation set
     val_dataset = Dataset(val_imgs, val_masks, transform_fn_crop)
     validation_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=32, shuffle=False
@@ -316,10 +344,10 @@ def train(
     val_dataloader,
     loss_fn,
     epochs=0,
-    lr=0.001,
+    lr=0,
     device="cpu",
     scheduler=None,
-    trial=None,
+    trial="0",
 ):
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -342,6 +370,7 @@ def train(
     validation_losses = []
     epochs_iter = range(epochs) if epochs is not None else itertools.count()
     for epoch in tqdm(epochs_iter, desc="Training epochs"):
+
         loss_train, loss_val = run_epoch(train_epoch_fn, eval_epoch_fn)
         train_losses.append(loss_train)
         validation_losses.append(loss_val)
@@ -351,7 +380,11 @@ def train(
 
         trial.report(loss_val, step=epoch)
 
-        logger.info(f"{epoch=} {loss_val=:.5f}")
+        current_lr = optimizer.param_groups[0]['lr']
+        if scheduler:
+            scheduler.step()
+        logger.info(
+            f"{epoch=} {loss_val=:.5f}  Learning Rate = {current_lr:.6e}")
 
     return {"train_loss": train_losses, "val_loss": validation_losses}, best_model_state
 
@@ -416,9 +449,9 @@ def pad_to(x, stride):
 
 def unpad(x, pad):
     if pad[2] + pad[3] > 0:
-        x = x[:, :, pad[2] : -pad[3], :]
+        x = x[:, :, pad[2]: -pad[3], :]
     if pad[0] + pad[1] > 0:
-        x = x[:, :, :, pad[0] : -pad[1]]
+        x = x[:, :, :, pad[0]: -pad[1]]
     return x
 ```
 
@@ -456,20 +489,24 @@ def get_scheduler(optimizer, scheduler_type, params):
 
 ```python
 def configure_scheduler(trial):
+    # scheduler_type = "linear"
     scheduler_type = trial.suggest_categorical(
-        "scheduler_type", [None, "warmup_cosine"]
+        "scheduler_type", [None, "warmup_cosine", "linear"]
     )
     scheduler_params = {}
 
     if scheduler_type == "linear":
         scheduler_params["end_factor"] = trial.suggest_categorical(
-            "end_factor", [1e-2, 1e-3]
+            "end_factor", [1e-1, 1e-2, 1e-3]
         )
         scheduler_params["T_0"] = 0
+
     elif scheduler_type == "warmup_cosine":
         scheduler_params["end_factor"] = 0
         scheduler_params["T_mult"] = 1
-        scheduler_params["T_0"] = 25
+        scheduler_params["T_0"] = trial.suggest_categorical(
+            "T0", [25, 50]
+        )
     else:
         scheduler_params["end_factor"] = 0
         scheduler_params["T_0"] = 0
@@ -506,12 +543,19 @@ def loss_wrapper(pred, target_dict):
 
 
 def objective(trial):
+    seed = 678
+    set_seed(seed)
     # define hyperparameters
-    depth = 4
-    patch_size = 256
-    filters = 16
+    depth = trial.suggest_categorical("depth", [3, 4, 5])
+    patch_size = trial.suggest_categorical("patch_size", [128, 256])
+    filters = trial.suggest_categorical("filters", [8, 16, 32])
 
-    lr = trial.suggest_categorical("lr", [1e-2, 1e-3])
+    # depth = 3
+    # patch_size = 128
+    # filters = 8
+
+    # lr = 1e-3
+    lr = trial.suggest_categorical("lr", [1e-2, 1e-3, 1e-4])
 
     # probability threshold for the binary mask
     probability_threshold = 0.5
@@ -534,6 +578,7 @@ def objective(trial):
             validation_loader,
             loss_wrapper,
             epochs=epochs,
+            lr=lr,
             device=device,
             scheduler=scheduler,
             trial=trial,
@@ -562,7 +607,6 @@ def objective(trial):
         preds,
         trial.number,
         probability_threshold,
-        histogram_path,
         test_masks,
         device,
         test_roi,
@@ -582,7 +626,8 @@ def objective(trial):
     )
 
     plot_loss(depth, patch_size, filters, trial.number, loss_dict, loss_path)
-    plot_histogram(iou_values, depth, patch_size, filters, trial.number, histogram_path)
+    plot_histogram(iou_values, depth, patch_size,
+                   filters, trial.number, histogram_path)
 
     return best_val_loss
 ```
@@ -590,22 +635,33 @@ def objective(trial):
 ```python
 if __name__ == "__main__":
     # Grid search
+    # search_space = {
+    # 'lr': [1e-2, 1e-3, 1e-4],
+    # 'scheduler_type': ["linear"],
+    # 'end_factor': [1e-2, 1e-3],
+    # }
     search_space = {
-        "lr": [1e-2, 1e-3],
-        "scheduler_type": [None, "warmup_cosine"],
-        "end_factor": [None],
+        'depth': [5],
+        'patch_size': [128],
+        'filters': [32],
+
+        'lr': [1e-3],
+        'end_factor': [1e-3],
+        'scheduler_type': ["linear"],
+
     }
 
     study = optuna.create_study(
-        storage="sqlite:///db.sqlite3",
+        storage="sqlite:///dbFINAL2.sqlite3",
         sampler=optuna.samplers.GridSampler(search_space),
-        study_name="optimization-WC-None",
+        study_name="optimization",
         direction="minimize",
     )
 
-    study.optimize(objective, n_trials=10)
+    study.optimize(objective, n_trials=1)
 
-    logger.info(f"Best value: {study.best_value} (params: {study.best_params})")
+    logger.info(
+        f"Best value: {study.best_value} (params: {study.best_params})")
 ```
 
 ```python
