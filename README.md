@@ -11,9 +11,31 @@ The goal of this project was to preprocess the given data and train a Convolutio
   - The process was refined through collaboration with scientists to ensure accuracy.
 
 ### 2. Model Development
+- using **U-net** architecture
 - **Augmentation**: Various data augmentation techniques were employed.
 - **Data Splitting**: The dataset was split into training, validation, and test.
 - **Optimization**: Hyperparameters were optimized using Optuna.
 
 ### 3. Integration with Fiji
 - **Shell Commands**: Integration of the model into Fiji (ImageJ).
+
+### 4. Example
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/5a65374f-2ec1-4a62-ae46-fb52531b0700" width="350"/>
+  <img src="https://github.com/user-attachments/assets/df40546b-6be2-42de-ac63-bdb678b3d04b" width="350"/>
+</p>
+
+<p align="center">
+  <b>Left:</b> Original image,  <b>Right:</b> Image with predicted coating layer
+</p>
+
+## Some important sources and libraries
+
+- Fiji (ImageJ): [https://imagej.net/software/fiji/](https://imagej.net/software/fiji/)
+- U-Net: Ronneberger et al., "U-Net: Convolutional Networks for Biomedical Image Segmentation" – [Paper](https://arxiv.org/abs/1505.04597)
+- Optuna for hyperparameter tuning: [https://optuna.org](https://optuna.org)
+- Albumentations for augmentation: [https://albumentations.ai](https://albumentations.ai)
+- [segmentation_models.pytorch](https://github.com/qubvel/segmentation_models.pytorch) – A PyTorch library with segmentation architectures - U-Net
+
+
+
