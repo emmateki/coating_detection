@@ -1,0 +1,12 @@
+name: fiji_segmentation
+dependencies:
+  - python=3.9
+  - numpy
+  - matplotlib
+  - opencv
+  - imageio
+  - pip
+  - pip:
+      - torch
+      - segmentation_models_pytorch
+      - roifile
