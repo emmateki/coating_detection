@@ -1,0 +1,11 @@
+albumentations
+imageio
+matplotlib
+numpy
+optuna
+scikit-learn
+scipy
+segmentation-models-pytorch
+torch
+torchmetrics
+tqdm
